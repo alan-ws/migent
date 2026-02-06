@@ -1,0 +1,62 @@
+{
+  "name": "migent",
+  "version": "1.0.0",
+  "description": "Autonomous site migration agent - visual diff tool for legacy to Next.js migrations",
+  "type": "module",
+  "bin": {
+    "migent": "./bin/migent.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp-server.d.ts",
+      "import": "./dist/mcp-server.js"
+    }
+  },
+  "files": [
+    "dist",
+    "bin"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli.js",
+    "mcp": "node dist/mcp-server.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "migration",
+    "nextjs",
+    "react",
+    "visual-diff",
+    "mcp",
+    "claude",
+    "autonomous-agent"
+  ],
+  "author": "Alan",
+  "license": "MIT",
+  "homepage": "https://github.com/alan-ws/migent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alan-ws/migent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/alan-ws/migent/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright": "^1.40.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
