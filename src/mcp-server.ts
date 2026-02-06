@@ -2,6 +2,7 @@
  * MCP Server for Migent
  *
  * Provides tools for Claude Code to autonomously run migration diffs:
+ * - ir_capture: Capture a single site's IR (for discovery, before Next.js exists)
  * - ir_start: Start watch mode, returns initial diff + first issue
  * - ir_next: Get next issue (blocks if waiting for rebuild)
  * - ir_status: Check progress
@@ -59,6 +60,44 @@ function createServer(): Server {
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
       tools: [
+        {
+          name: 'ir_capture',
+          description:
+            'Capture a single site\'s IR (Intermediate Representation) with FULL JavaScript execution. Scrolls page to trigger lazy loading, waits for network idle, and captures the complete rendered DOM including dynamically loaded content. Use this during discovery phase.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              port: {
+                type: 'number',
+                description: 'Port of the site to capture (e.g., 8000 for legacy)',
+              },
+              route: {
+                type: 'string',
+                description: 'Route to capture (e.g., "/about")',
+                default: '/',
+              },
+              viewport: {
+                type: 'object',
+                properties: {
+                  width: { type: 'number', default: 1280 },
+                  height: { type: 'number', default: 800 },
+                },
+                description: 'Viewport size for capture',
+              },
+              waitMs: {
+                type: 'number',
+                description: 'Milliseconds to wait after page load for JS to settle (default: 2000)',
+                default: 2000,
+              },
+              scrollToLoad: {
+                type: 'boolean',
+                description: 'Scroll through page to trigger lazy loading (default: true)',
+                default: true,
+              },
+            },
+            required: ['port'],
+          },
+        },
         {
           name: 'ir_start',
           description:
@@ -167,6 +206,91 @@ function createServer(): Server {
 
     try {
       switch (name) {
+        case 'ir_capture': {
+          const {
+            port,
+            route = '/',
+            viewport: viewportArg,
+            waitMs = 2000,
+            scrollToLoad = true,
+          } = args as {
+            port: number;
+            route?: string;
+            viewport?: { width?: number; height?: number };
+            waitMs?: number;
+            scrollToLoad?: boolean;
+          };
+
+          const viewport = {
+            width: viewportArg?.width || 1280,
+            height: viewportArg?.height || 800,
+          };
+
+          // Capture the page with full JS execution
+          const pageIR = await capturePage(port, route, viewport, { waitMs, scrollToLoad });
+
+          // Build component hierarchy from elements
+          const componentHierarchy = pageIR.elements
+            .filter((el) => ['header', 'nav', 'main', 'footer', 'aside', 'section', 'article'].includes(el.tag) || el.semanticRole)
+            .map((el) => ({
+              tag: el.tag,
+              selector: el.selector,
+              semanticRole: el.semanticRole,
+              rect: el.rect,
+              childCount: el.children.length,
+            }));
+
+          // Extract layout patterns
+          const layoutPatterns = {
+            hasHeader: pageIR.elements.some((el) => el.tag === 'header' || el.semanticRole === 'banner'),
+            hasNav: pageIR.elements.some((el) => el.tag === 'nav' || el.semanticRole === 'navigation'),
+            hasFooter: pageIR.elements.some((el) => el.tag === 'footer' || el.semanticRole === 'contentinfo'),
+            hasSidebar: pageIR.elements.some((el) => el.tag === 'aside' || el.semanticRole === 'complementary'),
+            hasMain: pageIR.elements.some((el) => el.tag === 'main' || el.semanticRole === 'main'),
+          };
+
+          // Store for later use with ir_element
+          legacyPageIR = pageIR;
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    success: true,
+                    url: pageIR.url,
+                    title: pageIR.meta.title,
+                    viewport: pageIR.viewport,
+                    elementCount: pageIR.elements.length,
+                    layoutPatterns,
+                    componentHierarchy: componentHierarchy.slice(0, 20),
+                    // Top-level elements for understanding structure
+                    topLevelElements: pageIR.elements
+                      .filter((el) => !el.selector.includes(' > ') || el.selector.split(' > ').length <= 2)
+                      .slice(0, 30)
+                      .map((el) => ({
+                        tag: el.tag,
+                        selector: el.selector,
+                        rect: el.rect,
+                        text: el.text.slice(0, 50),
+                        styles: {
+                          display: el.styles.display,
+                          position: el.styles.position,
+                          backgroundColor: el.styles.backgroundColor,
+                        },
+                      })),
+                    // Full elements available via ir_element for deep-dive
+                    message: 'Use ir_element to inspect specific elements in detail.',
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
         case 'ir_start': {
           const {
             legacyPort,

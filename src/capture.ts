@@ -142,12 +142,18 @@ const STYLE_PROPERTIES: (keyof ComputedStyles)[] = [
 
 /**
  * Capture a page and return its IR
+ *
+ * This captures the FULLY RENDERED page after JavaScript execution.
+ * It scrolls the page to trigger lazy loading and waits for all content.
  */
 export async function capturePage(
   port: number,
   route: string,
-  viewport: { width: number; height: number } = { width: 1280, height: 800 }
+  viewport: { width: number; height: number } = { width: 1280, height: 800 },
+  options: { waitMs?: number; scrollToLoad?: boolean } = {}
 ): Promise<PageIR> {
+  const { waitMs = 2000, scrollToLoad = true } = options;
+
   const browser = await getBrowser();
   const context = await browser.newContext({
     viewport,
@@ -164,8 +170,29 @@ export async function capturePage(
       timeout: 30000,
     });
 
-    // Additional wait for any animations/transitions to settle
-    await page.waitForTimeout(500);
+    // Scroll through page to trigger lazy loading
+    if (scrollToLoad) {
+      await page.evaluate(async () => {
+        const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+        const scrollHeight = document.body.scrollHeight;
+        const viewportHeight = window.innerHeight;
+
+        // Scroll down in chunks to trigger lazy loading
+        for (let scrollTop = 0; scrollTop < scrollHeight; scrollTop += viewportHeight) {
+          window.scrollTo(0, scrollTop);
+          await delay(100);
+        }
+
+        // Scroll back to top
+        window.scrollTo(0, 0);
+      });
+
+      // Wait for any lazy-loaded content to finish loading
+      await page.waitForLoadState('networkidle');
+    }
+
+    // Wait for animations/transitions to settle and JS to finish
+    await page.waitForTimeout(waitMs);
 
     // Capture the page
     const result = await page.evaluate(

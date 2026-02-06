@@ -6,158 +6,240 @@ user-invocable: true
 
 # Site Migration Skill
 
-Migrate any legacy website to modern Next.js autonomously.
+**STOP. READ THIS ENTIRE DOCUMENT BEFORE DOING ANYTHING.**
 
-## Commands
-
-- `/migration` - Start new migration or resume existing
-- `/migration pause` - Pause agents, save state
-- `/migration stop` - Abort migration entirely
-- `/migration resume` - Continue from pause
+This skill migrates legacy websites to modern Next.js. You MUST follow every step exactly. Skipping steps will result in failed migrations.
 
 ---
 
-## Phase 1: Setup
+## PHASE 1: DEPENDENCY INSTALLATION & VERIFICATION
 
-### Background Tasks (parallel)
+**DO NOT PROCEED TO PHASE 2 UNTIL ALL VERIFICATIONS PASS.**
 
-Install dependencies if not present:
+### 1.1 Install Skills
+
+Run each command and verify it succeeds:
 
 ```bash
-# Dependency skills
 npx skills add https://github.com/vercel-labs/agent-skills --skill vercel-react-best-practices
-npx skills add https://github.com/vercel-labs/next-skills --skill next-best-practices
-npx skills add https://github.com/vercel-labs/next-skills --skill next-cache-components
-npx skills add https://github.com/vercel/next.js --skill next-cache-components
-npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-guidelines
+```
+**VERIFY**: Command outputs success message.
 
-# Visual diffing tool
+```bash
+npx skills add https://github.com/vercel-labs/next-skills --skill next-best-practices
+```
+**VERIFY**: Command outputs success message.
+
+```bash
+npx skills add https://github.com/vercel-labs/next-skills --skill next-cache-components
+```
+**VERIFY**: Command outputs success message.
+
+```bash
+npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-guidelines
+```
+**VERIFY**: Command outputs success message.
+
+### 1.2 Install Migent
+
+```bash
 npm install -g migent
 ```
 
-### Foreground (ask user)
+**VERIFY**: Run `migent --version` and confirm version number is returned.
 
-Ask these questions:
+### 1.3 Verification Checkpoint
 
-1. "Which directory contains your legacy site?"
-   - Scan workspace for common patterns (package.json, composer.json, Gemfile, etc.)
-   - Offer detected options
+Before proceeding, confirm ALL of the following:
 
-2. "What should I name the Next.js project?"
-   - Suggest: `<legacy-name>-next` or `migrated-<legacy-name>`
+- [ ] `vercel-react-best-practices` skill installed
+- [ ] `next-best-practices` skill installed
+- [ ] `next-cache-components` skill installed
+- [ ] `web-design-guidelines` skill installed
+- [ ] `migent --version` returns a version number
 
-### Check for Existing Migration
-
-If `migration.json` exists in workspace:
-- Auto-resume from saved state
-- Skip setup questions
+**IF ANY VERIFICATION FAILS**: Stop and report the error to the user. Do not continue.
 
 ---
 
-## Phase 2: Discovery
+## PHASE 2: USER QUESTIONS & VALIDATION
 
-Analyze the legacy codebase and extract:
+### 2.1 Ask Questions
 
-### Structure Detection
-- Framework (Rails, Express, PHP, WordPress, static, etc.)
-- Routes (from router files, sitemap.xml, or directory structure)
-- Locales (i18n config, locale folders)
-- Auth (login pages, protected routes, session handling)
-- Shared components (header, footer, sidebar patterns)
+Ask the user these questions:
 
-### Asset Extraction
-- Copy images, fonts, icons to Next.js `/public`
-- Will be used with `next/image`, `next/font` by agents
+1. **"Which directory contains your legacy site?"**
+   - Scan workspace for `package.json`, `composer.json`, `Gemfile`, `index.html`, `index.php`
+   - Offer detected options as choices
 
-### SEO Extraction
-- Meta tags per page
-- Structured data (JSON-LD)
-- sitemap.xml, robots.txt
-- OG images
+2. **"What port is your legacy site running on?"** (or "How do I start it?")
+   - Common ports: 3000, 4000, 8000, 8080
 
-### Third-Party Detection
-- Analytics (GA, Plausible, etc.)
-- Forms (Mailchimp, Hubspot, etc.)
-- Chat widgets
-- Embedded scripts
+3. **"What should I name the Next.js project?"**
+   - Suggest: `<legacy-name>-next`
 
-### Environment
-- Copy `.env` files to Next.js project
-- Ensure `.env` is in `.gitignore`
+### 2.2 Validate Answers
 
-### Output
+**BEFORE PROCEEDING**, verify:
 
-Save to `migration.json`:
+```bash
+# Verify legacy directory exists
+ls -la <legacy-directory>
+```
+**MUST PASS**: Directory exists and contains files.
 
+```bash
+# Verify legacy site is accessible
+curl -s -o /dev/null -w "%{http_code}" http://localhost:<port>/
+```
+**MUST RETURN**: `200`
+
+**IF VALIDATION FAILS**: Return to user with specific error. Do not guess or proceed.
+
+---
+
+## PHASE 3: DISCOVERY (USING MIGENT)
+
+**YOU MUST USE MIGENT MCP TOOLS. DO NOT USE CURL. DO NOT FETCH HTML MANUALLY.**
+
+### 3.1 Test MCP Connection
+
+Call the MCP tool:
+```
+ir_capture(port: <legacy-port>, route: "/")
+```
+
+**VERIFY**: Returns JSON with `success: true`, `elementCount > 0`, `layoutPatterns`.
+
+**IF THIS FAILS**: The MCP server is not running. Stop and report to user.
+
+### 3.2 Discover Routes
+
+Analyze legacy codebase to find all routes:
+- Check `sitemap.xml` if exists
+- Check router files (Express routes, Next.js pages, PHP files)
+- Check navigation links in captured IR
+
+### 3.3 Capture All Routes
+
+For EACH discovered route, call:
+```
+ir_capture(port: <legacy-port>, route: "<route>")
+```
+
+Save results to `migration.json`:
 ```json
 {
   "legacy": {
-    "projectPath": "./legacy-site",
-    "url": "http://localhost:8000",
-    "framework": "rails",
-    "routes": ["/", "/about", "/products", "/contact"],
-    "locales": ["en", "es"],
-    "hasAuth": true,
-    "authRoutes": ["/login", "/dashboard"],
-    "sharedComponents": ["header", "footer", "sidebar"],
-    "assets": { "images": 42, "fonts": 3 },
-    "thirdParty": ["google-analytics", "mailchimp-forms"],
-    "seo": { "hasSitemap": true, "hasRobots": true }
+    "directory": "./legacy-site",
+    "port": 8000,
+    "framework": "php",
+    "routes": ["/", "/about", "/contact"]
+  },
+  "captures": {
+    "/": { "ir": <captured-ir>, "elementCount": 150 },
+    "/about": { "ir": <captured-ir>, "elementCount": 89 }
   },
   "next": {
-    "projectPath": "./my-next-app",
-    "url": "http://localhost:3000"
+    "directory": "./my-next-app",
+    "port": 3000
   },
   "progress": {}
 }
 ```
 
----
+### 3.4 Analyze JavaScript Patterns
 
-## Phase 3: Project Setup
-
-### Create Next.js Project
+Search legacy codebase for patterns that need conversion:
 
 ```bash
-npx create-next-app@latest <project-name> \
+# Find jQuery
+grep -r "jquery\|jQuery\|\\\$(" <legacy-directory> --include="*.js" --include="*.html" --include="*.php"
+```
+
+```bash
+# Find inline handlers
+grep -r "onclick=\|onsubmit=\|onchange=" <legacy-directory> --include="*.html" --include="*.php"
+```
+
+Document findings in `migration.json` under `legacy.javascript`.
+
+### 3.5 Copy Assets
+
+```bash
+mkdir -p <next-project>/public
+cp -r <legacy-directory>/images/* <next-project>/public/images/ 2>/dev/null || true
+cp -r <legacy-directory>/fonts/* <next-project>/public/fonts/ 2>/dev/null || true
+cp -r <legacy-directory>/assets/* <next-project>/public/assets/ 2>/dev/null || true
+```
+
+---
+
+## PHASE 4: PROJECT SETUP
+
+**INVOKE `/next-best-practices` SKILL BEFORE STARTING THIS PHASE.**
+
+### 4.1 Load Best Practices
+
+```
+/next-best-practices
+```
+
+**VERIFY**: Skill context is loaded. Read and understand the guidelines.
+
+### 4.2 Create Next.js Project
+
+Use the latest Next.js with modern tooling:
+
+```bash
+bunx create-next-app@latest <project-name> \
   --typescript \
   --tailwind \
-  --eslint \
   --app \
   --src-dir \
-  --import-alias "@/*"
+  --import-alias "@/*" \
+  --use-bun
 ```
 
-### Configure for Modern Patterns
+**NOTE**:
+- Use `bun`, not `npm`
+- Use `bunx`, not `npx`
+- ESLint is NOT included - we use Biome
 
-`next.config.ts`:
-```ts
-import type { NextConfig } from 'next';
+### 4.3 Install Biome
 
-const nextConfig: NextConfig = {
-  experimental: {
-    ppr: 'incremental',
+```bash
+cd <project-name>
+bun add -D @biomejs/biome
+```
+
+Create `biome.json`:
+```json
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "organizeImports": { "enabled": true },
+  "linter": {
+    "enabled": true,
+    "rules": { "recommended": true }
   },
-};
-
-export default nextConfig;
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  }
+}
 ```
 
-### Setup Locales (if detected)
+### 4.4 Install Framer Motion (if animations detected)
 
-Create `[locale]` dynamic segment structure:
-```
-app/
-└── [locale]/
-    ├── layout.tsx
-    └── page.tsx
+If Phase 3 found jQuery animations or CSS animations:
+```bash
+bun add framer-motion
 ```
 
-Create `middleware.ts` (or `proxy.ts` in Next.js 16+) for locale routing.
+### 4.5 Configure MCP
 
-### Add MCP Config
-
-Create `.mcp.json` in Next.js project:
+Create `.mcp.json` in project root:
 ```json
 {
   "mcpServers": {
@@ -169,309 +251,235 @@ Create `.mcp.json` in Next.js project:
 }
 ```
 
+### 4.6 Test MCP Configuration
+
+Start the Next.js dev server:
+```bash
+bun run dev
+```
+
+Then test MCP works with Next.js:
+```
+ir_capture(port: 3000, route: "/")
+```
+
+**VERIFY**: Returns captured IR for the default Next.js page.
+
 ---
 
-## Phase 4: Server Management
+## PHASE 5: SERVER MANAGEMENT
 
-### Legacy Site
+### 5.1 Verify Both Sites Running
 
-1. Check if running on common ports (3000, 8000, 8080, 4000)
-2. Ask user: "Is your legacy site running? I see port 8000 active"
-3. If not running:
-   - Ask: "How do I start your legacy site?"
-   - If user doesn't know: detect from codebase
-     - `package.json` → `npm start` or `npm run dev`
-     - `Gemfile` → `rails server`
-     - `composer.json` → `php artisan serve`
-     - `docker-compose.yml` → `docker-compose up`
-   - Run detected command in background
+Legacy site:
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:<legacy-port>/
+```
+**MUST RETURN**: `200`
 
-### Next.js Site
+Next.js site:
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/
+```
+**MUST RETURN**: `200`
 
-Start and manage the dev server:
+**IF EITHER FAILS**: Do not proceed. Fix server issues first.
+
+---
+
+## PHASE 6: MIGRATION
+
+### CRITICAL RULES - VIOLATIONS ARE FAILURES
+
+**FORBIDDEN - NEVER USE THESE:**
+- `dangerouslySetInnerHTML` - NEVER use to copy legacy HTML
+- `onclick="..."` or any inline event handlers in output
+- Legacy CSS class names (must convert to Tailwind)
+- jQuery or any jQuery patterns
+- `<script>` tags with inline JavaScript
+- `class=` instead of `className=`
+
+**REQUIRED - ALWAYS USE THESE:**
+- Proper JSX with `className`
+- React event handlers (`onClick={handler}`)
+- Tailwind CSS utilities (convert from captured styles)
+- `next/image` for images
+- `next/font` for fonts
+- Server Components by default
+- `'use client'` only when needed
+
+### 6.1 For Each Route
+
+#### Step 1: Load Skills
+
+```
+/vercel-react-best-practices
+/next-best-practices
+/web-design-guidelines
+```
+
+**You MUST invoke these skills. They contain critical patterns.**
+
+#### Step 2: Read Captured IR
+
+Read from `migration.json` the captured IR for this route.
+
+Use `ir_element(site: "legacy", selector: "...")` to inspect specific elements.
+
+#### Step 3: Create Page
+
+Based on captured IR:
+1. Create `app/<route>/page.tsx`
+2. Convert layout structure to JSX
+3. Convert CSS values to Tailwind utilities
+4. Convert event handlers to React patterns
+5. Create components for reusable parts (header, footer)
+
+**Example conversion:**
+```tsx
+// WRONG - copying HTML
+<div dangerouslySetInnerHTML={{ __html: legacyHtml }} />
+
+// CORRECT - proper React
+<div className="flex items-center gap-4 bg-[#c41e3a] px-5 py-4">
+  <button onClick={handleClick} className="rounded bg-white px-4 py-2">
+    Click me
+  </button>
+</div>
+```
+
+#### Step 4: Code Quality Gate
+
+**BEFORE visual validation**, verify no anti-patterns:
 
 ```bash
-cd <next-project>
-npm run dev
+grep -r "dangerouslySetInnerHTML" <next-project>/src/
+```
+**MUST RETURN**: No results
+
+```bash
+grep -r 'onclick="' <next-project>/src/
+```
+**MUST RETURN**: No results
+
+```bash
+grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
+```
+**MUST RETURN**: No results (should be `className`)
+
+**IF ANY CHECK FAILS**: Fix before proceeding.
+
+#### Step 5: Visual Validation
+
+Start watch mode:
+```
+ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
 ```
 
-Keep running throughout migration. Skill owns this lifecycle.
+Loop until match >= 95%:
+```
+issue = ir_next()
+
+IF issue exists:
+  - Read issue details (selector, styles, position)
+  - Fix the specific issue using Tailwind
+  - Save file
+  - Wait for rebuild
+  - Continue loop
+
+IF match >= 95%:
+  - Mark route complete in migration.json
+  - Move to next route
+```
+
+#### Step 6: Final Verification
+
+```
+ir_status()
+```
+
+Confirm match >= 95% before marking complete.
 
 ---
 
-## Phase 5: Migration
+## PHASE 7: COMPLETION
 
-### Warn User
+### 7.1 Generate Report
 
-Before starting:
-> "Migration is starting. Please don't edit files in the Next.js project during migration. Use `/migration pause` if you need to intervene. Watch progress live at http://localhost:3000"
+Create `MIGRATION_REPORT.md` with:
+- Summary (routes migrated, match percentages)
+- Per-route breakdown
+- Any routes needing human review
+- Components created
+- Recommendations
 
-### Architecture
+### 7.2 Cleanup
 
 ```
-Orchestrator Agent
-    │
-    ├── Reads migration.json
-    ├── Works one route at a time (sequential)
-    ├── Spawns parallel sub-tasks within each route
-    ├── Human sees live progress on :3000
-    │
-    └── Route Agent (current route)
-            │
-            ├── Sub-task: Header component
-            ├── Sub-task: Footer component
-            ├── Sub-task: Main content
-            └── Sub-task: Styling fixes
-```
-
-All work happens on main branch - no worktrees, no merging complexity.
-
-### Orchestrator Responsibilities
-
-1. Read discovery output from `migration.json`
-2. Create Claude Task for each route
-3. Work routes sequentially (one at a time)
-4. For each route, spawn sub-tasks for parallel component work
-5. Monitor progress via `migration.json`
-6. Handle failures:
-   - 5 tries per agent (try = work until plateau)
-   - If stuck: spawn fresh agent
-   - 5 more tries with fresh agent
-   - If still stuck: mark for human review, continue
-7. Update `migration.json` progress
-8. Generate report when complete
-
-### Route Agent Flow
-
-For each route:
-
-1. **Load best practices** - invoke all 5 skills:
-   ```
-   /vercel-react-best-practices
-   /next-best-practices
-   /next-cache-components
-   /web-design-guidelines
-   ```
-
-2. **Start MCP loop** for the route:
-   ```
-   ir_start(legacyPort, nextPort, legacyRoute, nextRoute)
-
-   WHILE match < 95%:
-       issue = ir_next()
-       IF regression: fix regression first
-       IF no issues: break
-
-       Analyze issue (selector, position, styles, HTML)
-
-       IF issue is shared component (header, footer, sidebar):
-           Spawn sub-task for component (can run parallel)
-       ELSE:
-           Fix directly
-
-       Apply fix following loaded best practices:
-         - Server Components by default
-         - next/image for images
-         - next/font for fonts
-         - generateMetadata for SEO
-         - next/script for third-party
-         - Tailwind for styling
-       Save file
-       Wait for rebuild detection
-   ```
-
-3. **Report completion** to orchestrator, move to next route
-
-### Shared Components
-
-First route to need a shared component (header, footer, layout) creates it.
-Subsequent routes reuse via import.
-
-All changes visible immediately on :3000 - human watches live progress.
-
-### Progress Tracking
-
-Update `migration.json` continuously:
-
-```json
-{
-  "progress": {
-    "/": { "match": 97, "status": "complete" },
-    "/about": { "match": 82, "status": "in_progress", "tries": 2 },
-    "/products": { "match": 0, "status": "pending" },
-    "/contact": { "match": 45, "status": "human_review", "reason": "stuck at 45% after 10 tries" }
-  }
-}
+ir_stop()
 ```
 
 ---
 
-## Phase 6: Completion
+## MCP TOOLS REFERENCE
 
-### Trigger
-
-All routes either:
-- 95%+ match, or
-- Marked for human review
-
-### Generate Migration Report
-
-Save to `MIGRATION_REPORT.md`:
-
-```markdown
-# Migration Report
-
-## Summary
-- Legacy: ./legacy-site (Rails)
-- Next.js: ./my-next-app
-- Routes migrated: 12/15
-- Routes needing review: 3
-- Duration: [time]
-
-## Per-Route Breakdown
-
-| Route | Match | Status | Notes |
-|-------|-------|--------|-------|
-| / | 97% | Complete | - |
-| /about | 96% | Complete | - |
-| /products | 45% | Needs Review | Complex grid layout |
-| ... | ... | ... | ... |
-
-## Routes Needing Human Review
-
-### /products (45%)
-- Stuck on: product grid layout with filters
-- Last issue: flexbox alignment mismatch
-- Suggestion: Check legacy CSS for custom grid system
-
-### /dashboard (62%)
-- Stuck on: authenticated state differences
-- Last issue: session-dependent content
-- Suggestion: Verify auth implementation matches
-
-## Components Created
-
-- src/components/Header.tsx
-- src/components/Footer.tsx
-- src/components/ProductCard.tsx
-- ... (full list)
-
-## Recommendations
-
-### Images
-- 42 images copied to /public
-- Consider: Move to Vercel Blob or CDN for better performance
-- All using next/image ✓
-
-### Fonts
-- 3 fonts copied to /public
-- Using next/font ✓
-- Consider: Subset fonts for faster loading
-
-### SEO
-- generateMetadata implemented ✓
-- sitemap.xml: Consider dynamic route handler
-- robots.txt: Review for production URLs
-
-### Performance
-- Run `npx next build` to check for warnings
-- Run Lighthouse audit
-- Consider: Enable PPR for dynamic routes
-
-### Third-Party
-- Google Analytics: Migrated to next/script ✓
-- Mailchimp forms: Recreated as React component ✓
-
-## Next Steps
-
-1. Review routes marked for human attention
-2. Run full test pass
-3. Update environment variables for production
-4. Configure deployment (Vercel recommended)
-5. Set up redirects from legacy URLs if needed
+### ir_capture
+Capture a single site's IR. Use during discovery.
 ```
-
-### Cleanup
-
-- Stop Next.js dev server
-- Keep `migration.json` for reference
-
----
-
-## MCP Tools Reference
+ir_capture(port: number, route?: string, viewport?: {width, height})
+```
+Returns: Layout patterns, component hierarchy, elements, styles.
 
 ### ir_start
-Start watch mode for a route.
+Start watch mode for visual validation.
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
-Returns: First issue or success status
+Returns: Initial diff and first issue.
 
 ### ir_next
-Get next issue. Blocks during rebuild. Warns on regression.
-Returns: Issue object with selector, position, styles, HTML snippet, suggested fix
+Get next issue to fix. Blocks during rebuild.
+Returns: Issue with selector, position, styles, suggested fix.
 
 ### ir_status
-Get current match % and issue counts.
-Returns: Match percentages, issue breakdown by severity
+Get current match percentage and issue counts.
 
 ### ir_element
 Deep-dive on specific element.
 ```
 ir_element(site: "legacy" | "next", selector: string)
 ```
-Returns: Full element IR with computed styles, bounding box
 
 ### ir_compare
 Side-by-side element comparison.
 ```
 ir_compare(selector: string)
 ```
-Returns: Both elements with diff highlighted
 
 ### ir_stop
-Stop watch mode for current route.
+Stop watch mode.
 
 ---
 
-## Config Files
+## ERROR HANDLING
 
-### migration.json (gitignored)
-Skill state: discovery output, progress tracking, agent assignments.
-Auto-resume reads from this file.
+### MCP tool fails
+Stop and report to user. Do not attempt workarounds.
 
-### migent.config.json (gitignored)
-Tool config: ports, thresholds, watch paths.
+### Site unreachable
+Stop and ask user to restart the server.
 
----
-
-## Error Handling
-
-### Legacy site goes down
-- Pause migration
-- Notify user: "Legacy site unreachable. Please restart it and run `/migration resume`"
-
-### Next.js build fails
-- Agent reports build error
-- Orchestrator reassigns to fresh agent
-- If persistent: mark route for human review
-
-### Agent stuck (plateau below 95%)
-- 5 tries with same agent
-- Spawn fresh agent (new perspective)
-- 5 tries with fresh agent
-- Mark for human review, continue with other routes
+### Match stuck below 95%
+After 5 attempts on same issue:
+1. Mark route for human review
+2. Document the blocker
+3. Continue with next route
 
 ---
 
-## Resumability
+## RESUMABILITY
 
-If Claude closes mid-migration:
-
-1. User runs `/migration` again
-2. Skill detects `migration.json`
-3. Auto-resumes:
-   - Skip completed routes
-   - Restart in-progress routes
-   - Continue pending routes
-   - Preserve discovery data
+If `migration.json` exists when `/migration` is invoked:
+1. Read existing state
+2. Skip completed routes
+3. Resume from last in-progress route
