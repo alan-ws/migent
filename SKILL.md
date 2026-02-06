@@ -1,6 +1,6 @@
 ---
 name: migration
-description: Autonomous site migration from any legacy stack to modern Next.js. Parallel agents, visual diffing, best practices enforcement.
+description: Autonomous site migration from any legacy stack to modern Next.js. Visual diffing, best practices enforcement, live progress on localhost.
 user-invocable: true
 ---
 
@@ -212,23 +212,26 @@ Before starting:
 Orchestrator Agent
     │
     ├── Reads migration.json
-    ├── Creates Claude Tasks for routes
-    ├── Spawns 3 worker agents
-    ├── Assigns routes round-robin
-    ├── Monitors progress
-    ├── Handles failures
+    ├── Works one route at a time (sequential)
+    ├── Spawns parallel sub-tasks within each route
+    ├── Human sees live progress on :3000
     │
-    ├── Worker 1 → routes A, D, G...
-    ├── Worker 2 → routes B, E, H...
-    └── Worker 3 → routes C, F, I...
+    └── Route Agent (current route)
+            │
+            ├── Sub-task: Header component
+            ├── Sub-task: Footer component
+            ├── Sub-task: Main content
+            └── Sub-task: Styling fixes
 ```
+
+All work happens on main branch - no worktrees, no merging complexity.
 
 ### Orchestrator Responsibilities
 
 1. Read discovery output from `migration.json`
 2. Create Claude Task for each route
-3. Spawn 3 worker agents
-4. Assign routes round-robin
+3. Work routes sequentially (one at a time)
+4. For each route, spawn sub-tasks for parallel component work
 5. Monitor progress via `migration.json`
 6. Handle failures:
    - 5 tries per agent (try = work until plateau)
@@ -238,9 +241,9 @@ Orchestrator Agent
 7. Update `migration.json` progress
 8. Generate report when complete
 
-### Worker Agent Flow
+### Route Agent Flow
 
-Each worker agent:
+For each route:
 
 1. **Load best practices** - invoke all 5 skills:
    ```
@@ -250,12 +253,7 @@ Each worker agent:
    /web-design-guidelines
    ```
 
-2. **Setup worktree** for isolation:
-   ```bash
-   git worktree add ../migration-<route> -b migration/<route>
-   ```
-
-3. **Start MCP loop** for assigned route:
+2. **Start MCP loop** for the route:
    ```
    ir_start(legacyPort, nextPort, legacyRoute, nextRoute)
 
@@ -265,7 +263,12 @@ Each worker agent:
        IF no issues: break
 
        Analyze issue (selector, position, styles, HTML)
-       Find/create corresponding Next.js component
+
+       IF issue is shared component (header, footer, sidebar):
+           Spawn sub-task for component (can run parallel)
+       ELSE:
+           Fix directly
+
        Apply fix following loaded best practices:
          - Server Components by default
          - next/image for images
@@ -277,21 +280,14 @@ Each worker agent:
        Wait for rebuild detection
    ```
 
-4. **Merge when done**:
-   ```bash
-   git checkout main
-   git merge migration/<route>
-   git worktree remove ../migration-<route>
-   ```
-
-5. **Report completion** to orchestrator
+3. **Report completion** to orchestrator, move to next route
 
 ### Shared Components
 
-First agent to need a shared component (header, footer, layout) creates it.
-Other agents reuse via import.
+First route to need a shared component (header, footer, layout) creates it.
+Subsequent routes reuse via import.
 
-No coordination needed - first write wins, others adapt.
+All changes visible immediately on :3000 - human watches live progress.
 
 ### Progress Tracking
 
@@ -300,8 +296,8 @@ Update `migration.json` continuously:
 ```json
 {
   "progress": {
-    "/": { "match": 97, "status": "complete", "agent": "worker-1" },
-    "/about": { "match": 82, "status": "in_progress", "agent": "worker-2", "tries": 2 },
+    "/": { "match": 97, "status": "complete" },
+    "/about": { "match": 82, "status": "in_progress", "tries": 2 },
     "/products": { "match": 0, "status": "pending" },
     "/contact": { "match": 45, "status": "human_review", "reason": "stuck at 45% after 10 tries" }
   }
@@ -398,7 +394,6 @@ Save to `MIGRATION_REPORT.md`:
 ### Cleanup
 
 - Stop Next.js dev server
-- Remove worktrees if any remain
 - Keep `migration.json` for reference
 
 ---
