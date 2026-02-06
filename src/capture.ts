@@ -141,19 +141,56 @@ const STYLE_PROPERTIES: (keyof ComputedStyles)[] = [
 ];
 
 /**
+ * Animation metadata extracted from the page
+ */
+export interface AnimationData {
+  /** CSS @keyframes definitions */
+  keyframes: Array<{
+    name: string;
+    rules: string;
+  }>;
+  /** Elements with animations */
+  animatedElements: Array<{
+    selector: string;
+    animationName: string;
+    duration: string;
+    timingFunction: string;
+    delay: string;
+    iterationCount: string;
+    direction: string;
+    fillMode: string;
+  }>;
+  /** Elements with transitions */
+  transitionElements: Array<{
+    selector: string;
+    property: string;
+    duration: string;
+    timingFunction: string;
+    delay: string;
+  }>;
+  /** jQuery animations detected (from script analysis) */
+  jQueryAnimations: string[];
+}
+
+/**
  * Capture a page and return its IR
  *
- * This captures the FULLY RENDERED page after JavaScript execution.
- * It scrolls the page to trigger lazy loading and waits for all content.
+ * DETERMINISTIC CAPTURE:
+ * 1. Wait for network idle
+ * 2. Force all lazy images to load
+ * 3. Wait for all images to complete
+ * 4. Wait for fonts to load
+ * 5. Extract animation metadata BEFORE finishing animations
+ * 6. Force all animations to END STATE
+ * 7. Wait for DOM stability (no mutations)
+ *
+ * This ensures we always capture the same final state.
  */
 export async function capturePage(
   port: number,
   route: string,
-  viewport: { width: number; height: number } = { width: 1280, height: 800 },
-  options: { waitMs?: number; scrollToLoad?: boolean } = {}
+  viewport: { width: number; height: number } = { width: 1280, height: 800 }
 ): Promise<PageIR> {
-  const { waitMs = 2000, scrollToLoad = true } = options;
-
   const browser = await getBrowser();
   const context = await browser.newContext({
     viewport,
@@ -164,35 +201,183 @@ export async function capturePage(
   const url = `http://localhost:${port}${route}`;
 
   try {
-    // Navigate and wait for network idle
+    // 1. Navigate and wait for network idle
     await page.goto(url, {
       waitUntil: 'networkidle',
       timeout: 30000,
     });
 
-    // Scroll through page to trigger lazy loading
-    if (scrollToLoad) {
-      await page.evaluate(async () => {
-        const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-        const scrollHeight = document.body.scrollHeight;
-        const viewportHeight = window.innerHeight;
+    // 2. Force all lazy images to load
+    await page.evaluate(() => {
+      document.querySelectorAll('img[loading="lazy"], img[data-src], img[data-lazy]').forEach((img: Element) => {
+        const imgEl = img as HTMLImageElement;
+        imgEl.loading = 'eager';
 
-        // Scroll down in chunks to trigger lazy loading
-        for (let scrollTop = 0; scrollTop < scrollHeight; scrollTop += viewportHeight) {
-          window.scrollTo(0, scrollTop);
-          await delay(100);
+        // Handle data-src lazy loading patterns
+        const dataSrc = imgEl.getAttribute('data-src') || imgEl.getAttribute('data-lazy');
+        if (dataSrc && !imgEl.src) {
+          imgEl.src = dataSrc;
         }
 
-        // Scroll back to top
-        window.scrollTo(0, 0);
+        // Trigger load by cycling src
+        if (imgEl.src) {
+          const src = imgEl.src;
+          imgEl.src = '';
+          imgEl.src = src;
+        }
+      });
+    });
+
+    // 3. Wait for ALL images to complete
+    await page.evaluate(() =>
+      Promise.all(
+        Array.from(document.images)
+          .filter(img => !img.complete && img.src)
+          .map(img => new Promise(resolve => {
+            img.onload = resolve;
+            img.onerror = resolve;
+            // Timeout fallback for stuck images
+            setTimeout(resolve, 5000);
+          }))
+      )
+    );
+
+    // 4. Wait for fonts to load
+    await page.evaluate(() => document.fonts.ready);
+
+    // Wait for network to settle again after lazy loading
+    await page.waitForLoadState('networkidle');
+
+    // 5. Extract animation metadata BEFORE we finish animations
+    const animationData = await page.evaluate((): AnimationData => {
+      const keyframes: Array<{ name: string; rules: string }> = [];
+      const animatedElements: AnimationData['animatedElements'] = [];
+      const transitionElements: AnimationData['transitionElements'] = [];
+      const jQueryAnimations: string[] = [];
+
+      // Extract @keyframes from stylesheets
+      for (const sheet of document.styleSheets) {
+        try {
+          for (const rule of sheet.cssRules) {
+            if (rule instanceof CSSKeyframesRule) {
+              keyframes.push({
+                name: rule.name,
+                rules: rule.cssText,
+              });
+            }
+          }
+        } catch {
+          // Cross-origin stylesheet, skip
+        }
+      }
+
+      // Build selector for element
+      function buildSelector(el: Element): string {
+        const parts: string[] = [];
+        let current: Element | null = el;
+        while (current && current !== document.body) {
+          let selector = current.tagName.toLowerCase();
+          if (current.id) {
+            parts.unshift(`#${current.id}`);
+            break;
+          }
+          const classes = Array.from(current.classList).slice(0, 2).join('.');
+          if (classes) selector += `.${classes}`;
+          parts.unshift(selector);
+          current = current.parentElement;
+        }
+        return parts.join(' > ');
+      }
+
+      // Find elements with CSS animations
+      document.querySelectorAll('*').forEach(el => {
+        const computed = window.getComputedStyle(el);
+
+        // Check for animations
+        if (computed.animationName && computed.animationName !== 'none') {
+          animatedElements.push({
+            selector: buildSelector(el),
+            animationName: computed.animationName,
+            duration: computed.animationDuration,
+            timingFunction: computed.animationTimingFunction,
+            delay: computed.animationDelay,
+            iterationCount: computed.animationIterationCount,
+            direction: computed.animationDirection,
+            fillMode: computed.animationFillMode,
+          });
+        }
+
+        // Check for transitions
+        if (computed.transitionProperty && computed.transitionProperty !== 'none' && computed.transitionProperty !== 'all') {
+          transitionElements.push({
+            selector: buildSelector(el),
+            property: computed.transitionProperty,
+            duration: computed.transitionDuration,
+            timingFunction: computed.transitionTimingFunction,
+            delay: computed.transitionDelay,
+          });
+        }
       });
 
-      // Wait for any lazy-loaded content to finish loading
-      await page.waitForLoadState('networkidle');
-    }
+      // Detect jQuery animation patterns in scripts
+      document.querySelectorAll('script').forEach(script => {
+        const content = script.textContent || '';
+        const patterns = [
+          /\.animate\s*\(/g,
+          /\.fadeIn\s*\(/g,
+          /\.fadeOut\s*\(/g,
+          /\.fadeToggle\s*\(/g,
+          /\.slideUp\s*\(/g,
+          /\.slideDown\s*\(/g,
+          /\.slideToggle\s*\(/g,
+          /\.show\s*\(\s*\d/g,  // .show(duration)
+          /\.hide\s*\(\s*\d/g,  // .hide(duration)
+        ];
+        patterns.forEach(pattern => {
+          const matches = content.match(pattern);
+          if (matches) {
+            jQueryAnimations.push(...matches.map(m => m.trim()));
+          }
+        });
+      });
 
-    // Wait for animations/transitions to settle and JS to finish
-    await page.waitForTimeout(waitMs);
+      return { keyframes, animatedElements, transitionElements, jQueryAnimations };
+    });
+
+    // 6. Force all animations to END STATE (deterministic capture)
+    await page.evaluate(() => {
+      document.getAnimations().forEach(anim => {
+        try {
+          anim.finish();
+        } catch {
+          // Some animations can't be finished, cancel them
+          anim.cancel();
+        }
+      });
+    });
+
+    // 7. Wait for DOM stability (no mutations for 300ms)
+    await page.evaluate(() => new Promise<void>(resolve => {
+      let timeout: number;
+      const observer = new MutationObserver(() => {
+        clearTimeout(timeout);
+        timeout = window.setTimeout(() => {
+          observer.disconnect();
+          resolve();
+        }, 300);
+      });
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+      });
+      // Initial timeout in case nothing changes
+      timeout = window.setTimeout(() => {
+        observer.disconnect();
+        resolve();
+      }, 300);
+    }));
 
     // Capture the page
     const result = await page.evaluate(
@@ -373,6 +558,7 @@ export async function capturePage(
       elements,
       breakpoints: [], // Filled by viewport detection module
       meta: result.meta,
+      animations: animationData,
     };
   } finally {
     await context.close();

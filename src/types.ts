@@ -193,6 +193,36 @@ export interface PageIR {
     title: string;
     description?: string;
   };
+
+  /** Animation data extracted from the page */
+  animations?: {
+    /** CSS @keyframes definitions */
+    keyframes: Array<{
+      name: string;
+      rules: string;
+    }>;
+    /** Elements with CSS animations */
+    animatedElements: Array<{
+      selector: string;
+      animationName: string;
+      duration: string;
+      timingFunction: string;
+      delay: string;
+      iterationCount: string;
+      direction: string;
+      fillMode: string;
+    }>;
+    /** Elements with CSS transitions */
+    transitionElements: Array<{
+      selector: string;
+      property: string;
+      duration: string;
+      timingFunction: string;
+      delay: string;
+    }>;
+    /** jQuery animation patterns detected */
+    jQueryAnimations: string[];
+  };
 }
 
 // ============================================================================

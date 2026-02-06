@@ -331,16 +331,17 @@ Use `ir_element(site: "legacy", selector: "...")` to inspect specific elements.
 Based on captured IR:
 1. Create `app/<route>/page.tsx`
 2. Convert layout structure to JSX
-3. Convert CSS values to Tailwind utilities
+3. **Convert captured computed styles to Tailwind** (see mapping below)
 4. Convert event handlers to React patterns
 5. Create components for reusable parts (header, footer)
+6. **Recreate animations** using captured animation data
 
 **Example conversion:**
 ```tsx
 // WRONG - copying HTML
 <div dangerouslySetInnerHTML={{ __html: legacyHtml }} />
 
-// CORRECT - proper React
+// CORRECT - proper React with Tailwind from captured styles
 <div className="flex items-center gap-4 bg-[#c41e3a] px-5 py-4">
   <button onClick={handleClick} className="rounded bg-white px-4 py-2">
     Click me
@@ -348,24 +349,181 @@ Based on captured IR:
 </div>
 ```
 
+#### Captured Styles → Tailwind Mapping
+
+Use `ir_element(site: "legacy", selector: "...")` to get computed styles, then convert:
+
+**Colors** (backgroundColor, color, borderColor):
+```
+rgb(196, 30, 58) → bg-[#c41e3a] or bg-red-600 (if close match)
+rgb(255, 255, 255) → bg-white
+rgb(0, 0, 0) → bg-black
+rgba(0,0,0,0.5) → bg-black/50
+```
+
+**Spacing** (padding, margin):
+```
+padding: "16px" → p-4
+padding: "15px 20px" → py-[15px] px-5
+margin: "0 auto" → mx-auto
+margin: "24px 0 0 0" → mt-6
+```
+
+**Typography**:
+```
+fontSize: "14px" → text-sm
+fontSize: "18px" → text-lg
+fontSize: "32px" → text-3xl
+fontWeight: "700" → font-bold
+fontWeight: "600" → font-semibold
+lineHeight: "1.5" → leading-normal
+textAlign: "center" → text-center
+```
+
+**Layout**:
+```
+display: "flex" → flex
+display: "grid" → grid
+flexDirection: "column" → flex-col
+justifyContent: "center" → justify-center
+alignItems: "center" → items-center
+gap: "16px" → gap-4
+```
+
+**Sizing**:
+```
+width: "100%" → w-full
+maxWidth: "1280px" → max-w-7xl
+height: "auto" → h-auto
+minHeight: "100vh" → min-h-screen
+```
+
+**Position**:
+```
+position: "absolute" → absolute
+position: "relative" → relative
+position: "fixed" → fixed
+top: "0px" → top-0
+left: "50%" → left-1/2
+```
+
+**Borders**:
+```
+borderRadius: "8px" → rounded-lg
+borderRadius: "9999px" → rounded-full
+borderWidth: "1px" → border
+borderColor: "rgb(229,231,235)" → border-gray-200
+```
+
+**Effects**:
+```
+opacity: "0.5" → opacity-50
+boxShadow: "0 1px 3px rgba(0,0,0,0.1)" → shadow-sm
+boxShadow: "0 10px 15px rgba(0,0,0,0.1)" → shadow-lg
+```
+
+**Arbitrary values** (when no Tailwind match):
+```
+padding: "13px" → p-[13px]
+backgroundColor: "#c41e3a" → bg-[#c41e3a]
+fontSize: "17px" → text-[17px]
+maxWidth: "1140px" → max-w-[1140px]
+```
+
+#### Recreating Animations
+
+From captured `animations` data:
+
+**CSS @keyframes → Framer Motion:**
+```tsx
+// Captured: { name: "fadeInUp", duration: "0.6s", timingFunction: "ease-out" }
+
+import { motion } from 'framer-motion';
+
+<motion.div
+  initial={{ opacity: 0, y: 20 }}
+  animate={{ opacity: 1, y: 0 }}
+  transition={{ duration: 0.6, ease: "easeOut" }}
+>
+```
+
+**CSS @keyframes → Tailwind animation:**
+```css
+/* Add to globals.css - copy the captured keyframes rule */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+```
+```tsx
+<div className="animate-[fadeInUp_0.6s_ease-out]">
+```
+
+**Transitions:**
+```tsx
+// Captured: { property: "background-color", duration: "0.2s", timingFunction: "ease" }
+
+<button className="transition-colors duration-200 ease-in-out hover:bg-red-700">
+```
+
+**jQuery animations → Framer Motion:**
+```tsx
+// Captured: jQueryAnimations: [".fadeIn(300)"]
+
+import { AnimatePresence, motion } from 'framer-motion';
+
+<AnimatePresence>
+  {isVisible && (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.3 }}
+    >
+  )}
+</AnimatePresence>
+```
+
 #### Step 4: Code Quality Gate
 
 **BEFORE visual validation**, verify no anti-patterns:
 
 ```bash
+# No dangerouslySetInnerHTML
 grep -r "dangerouslySetInnerHTML" <next-project>/src/
 ```
 **MUST RETURN**: No results
 
 ```bash
+# No inline event handlers
 grep -r 'onclick="' <next-project>/src/
 ```
 **MUST RETURN**: No results
 
 ```bash
+# No class= (must be className)
 grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
 ```
-**MUST RETURN**: No results (should be `className`)
+**MUST RETURN**: No results
+
+```bash
+# No inline styles (use Tailwind instead)
+grep -r 'style={{' <next-project>/src/ --include="*.tsx" --include="*.jsx"
+```
+**MUST RETURN**: No results (or only for truly dynamic values like width from state)
+
+```bash
+# No legacy CSS class names (should be Tailwind utilities)
+grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
+```
+**MUST RETURN**: No results (catches patterns like `cont_card`, `fill__red`)
+
+```bash
+# No jQuery imports
+grep -r "from ['\"]jquery['\"]" <next-project>/src/
+grep -r "require.*jquery" <next-project>/src/
+```
+**MUST RETURN**: No results
 
 **IF ANY CHECK FAILS**: Fix before proceeding.
 
@@ -424,11 +582,47 @@ ir_stop()
 ## MCP TOOLS REFERENCE
 
 ### ir_capture
-Capture a single site's IR. Use during discovery.
+DETERMINISTIC capture of a page with full JavaScript execution.
+
+**What it does:**
+1. Waits for network idle
+2. Forces all lazy images to load
+3. Waits for all images to complete
+4. Waits for fonts to load
+5. Extracts animation metadata (BEFORE finishing animations)
+6. Forces all animations to END STATE
+7. Waits for DOM stability
+
 ```
 ir_capture(port: number, route?: string, viewport?: {width, height})
 ```
-Returns: Layout patterns, component hierarchy, elements, styles.
+
+**Returns:**
+- Layout patterns (header, nav, footer, sidebar, main)
+- Component hierarchy
+- Top-level elements with computed styles
+- **Animation data:**
+  - `keyframes`: CSS @keyframes definitions (name + rules)
+  - `animatedElements`: Elements with animations (selector, name, duration, easing, delay)
+  - `transitionElements`: Elements with transitions (selector, property, duration, easing)
+  - `jQueryAnimations`: Detected jQuery animation patterns
+
+**Using animation data for migration:**
+```tsx
+// Legacy @keyframes captured:
+// { name: "fadeIn", rules: "@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }" }
+
+// Recreate with Framer Motion:
+<motion.div
+  initial={{ opacity: 0 }}
+  animate={{ opacity: 1 }}
+  transition={{ duration: 0.3 }}  // from animatedElements[].duration
+>
+
+// Or recreate with CSS:
+// Copy the @keyframes rule to your globals.css
+// Apply: className="animate-[fadeIn_0.3s_ease-in-out]"
+```
 
 ### ir_start
 Start watch mode for visual validation.

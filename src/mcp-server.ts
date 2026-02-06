@@ -63,7 +63,7 @@ function createServer(): Server {
         {
           name: 'ir_capture',
           description:
-            'Capture a single site\'s IR (Intermediate Representation) with FULL JavaScript execution. Scrolls page to trigger lazy loading, waits for network idle, and captures the complete rendered DOM including dynamically loaded content. Use this during discovery phase.',
+            'DETERMINISTIC page capture with full JavaScript execution. Waits for network idle, forces lazy images to load, waits for all images/fonts, extracts animation metadata (@keyframes, durations, easing), then forces animations to END STATE for consistent capture. Returns complete DOM structure, computed styles, AND animation data for recreating animations in Next.js.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -83,16 +83,6 @@ function createServer(): Server {
                   height: { type: 'number', default: 800 },
                 },
                 description: 'Viewport size for capture',
-              },
-              waitMs: {
-                type: 'number',
-                description: 'Milliseconds to wait after page load for JS to settle (default: 2000)',
-                default: 2000,
-              },
-              scrollToLoad: {
-                type: 'boolean',
-                description: 'Scroll through page to trigger lazy loading (default: true)',
-                default: true,
               },
             },
             required: ['port'],
@@ -211,14 +201,10 @@ function createServer(): Server {
             port,
             route = '/',
             viewport: viewportArg,
-            waitMs = 2000,
-            scrollToLoad = true,
           } = args as {
             port: number;
             route?: string;
             viewport?: { width?: number; height?: number };
-            waitMs?: number;
-            scrollToLoad?: boolean;
           };
 
           const viewport = {
@@ -226,8 +212,8 @@ function createServer(): Server {
             height: viewportArg?.height || 800,
           };
 
-          // Capture the page with full JS execution
-          const pageIR = await capturePage(port, route, viewport, { waitMs, scrollToLoad });
+          // Deterministic capture: waits for images, fonts, forces animations to end state
+          const pageIR = await capturePage(port, route, viewport);
 
           // Build component hierarchy from elements
           const componentHierarchy = pageIR.elements
@@ -280,8 +266,18 @@ function createServer(): Server {
                           backgroundColor: el.styles.backgroundColor,
                         },
                       })),
+                    // Animation data for recreating in Next.js
+                    animations: pageIR.animations ? {
+                      keyframeCount: pageIR.animations.keyframes.length,
+                      keyframes: pageIR.animations.keyframes.slice(0, 10),
+                      animatedElementCount: pageIR.animations.animatedElements.length,
+                      animatedElements: pageIR.animations.animatedElements.slice(0, 20),
+                      transitionElementCount: pageIR.animations.transitionElements.length,
+                      transitionElements: pageIR.animations.transitionElements.slice(0, 20),
+                      jQueryAnimations: pageIR.animations.jQueryAnimations,
+                    } : null,
                     // Full elements available via ir_element for deep-dive
-                    message: 'Use ir_element to inspect specific elements in detail.',
+                    message: 'Use ir_element for element details. Animation data includes @keyframes, durations, easing for recreation in Framer Motion or CSS.',
                   },
                   null,
                   2
