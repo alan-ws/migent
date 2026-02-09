@@ -332,7 +332,7 @@ Based on captured IR:
 1. Create `app/<route>/page.tsx`
 2. Convert layout structure to JSX
 3. **Convert captured computed styles to Tailwind** (see mapping below)
-4. Convert event handlers to React patterns
+4. Convert event handlers to React patterns using /vercel-react-best-practices skill
 5. Create components for reusable parts (header, footer)
 6. **Recreate animations** using captured animation data
 
