@@ -20,6 +20,11 @@ export type {
   DiscoveredRoute,
   WatchStatus,
   WatchState,
+  FontFaceDeclaration,
+  DetectedUIPattern,
+  UIPatternType,
+  RedirectEntry,
+  LocaleConfig,
 } from './types.js';
 
 // Capture
@@ -32,7 +37,7 @@ export { matchElements, findElementByPosition, findElementByText, defaultMatchCo
 export { diffPages, formatDiffSummary } from './diff.js';
 
 // Route Discovery
-export { discoverRoutes, discoverFromSitemap, discoverByCrawling } from './routes.js';
+export { discoverRoutes, discoverFromSitemap, discoverByCrawling, detectLocales, validateLocaleLinks } from './routes.js';
 
 // Viewport Detection
 export { detectBreakpoints, generateViewports, STANDARD_BREAKPOINTS } from './viewports.js';

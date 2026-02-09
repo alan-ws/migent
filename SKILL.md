@@ -158,14 +158,47 @@ Create `biome.json`:
 }
 ```
 
-### 3.4 Install Framer Motion (if animations detected)
+### 3.4 Install shadcn/ui
+
+**REQUIRED for all migrations.** shadcn provides accessible, production-ready components.
+
+```bash
+cd <project-name>
+bunx shadcn@latest init -y
+```
+
+Install base components that most sites need:
+```bash
+bunx shadcn@latest add button input textarea select card -y
+```
+
+After running `ir_capture` in Phase 5, install additional components based on detected UI patterns:
+```bash
+# Example: if ir_capture shows uiPatterns with Dialog, Table, NavigationMenu
+bunx shadcn@latest add dialog table navigation-menu -y
+```
+
+**VERIFY**:
+```bash
+# components.json must exist
+ls components.json
+```
+**MUST PASS**: File exists.
+
+```bash
+# UI components directory must exist
+ls src/components/ui/
+```
+**MUST PASS**: Contains component files (button.tsx, input.tsx, etc.).
+
+### 3.5 Install Framer Motion (if animations detected)
 
 If Phase 3 found jQuery animations or CSS animations:
 ```bash
 bun add framer-motion
 ```
 
-### 3.5 Configure MCP
+### 3.7 Configure MCP
 
 Create `.mcp.json` in the **workspace root** (the directory you opened in your editor / where Claude Code runs), **NOT** inside the Next.js project directory:
 
@@ -189,7 +222,7 @@ workspace/              ← .mcp.json goes HERE
 
 **IMPORTANT**: If `.mcp.json` is placed inside the Next.js project directory, Claude Code will not detect it. It must be at the workspace root.
 
-### 3.6 Test MCP Configuration
+### 3.8 Test MCP Configuration
 
 Start the Next.js dev server:
 ```bash
@@ -297,7 +330,41 @@ grep -r "onclick=\|onsubmit=\|onchange=" <legacy-directory> --include="*.html" -
 
 Document findings in `migration.json` under `legacy.javascript`.
 
-### 5.5 Copy Assets
+### 5.5 Detect Locales & Validate Links
+
+Check `ir_capture` redirect data and `ir_start` localeConfig for locale patterns:
+
+1. **Redirect-based detection**: If `ir_capture` returns `redirects` (e.g., `/` → `/en/`), the site uses locale prefixes.
+2. **Route-based detection**: If `ir_start` returns `localeConfig.detected: true`, locales were found in route paths.
+
+**If locales are detected:**
+
+```bash
+# Check ir_start response for localeConfig
+# Example: { detected: true, defaultLocale: "en", locales: ["en", "fr", "de"], pattern: "prefix" }
+```
+
+Actions:
+- Set up Next.js i18n middleware for locale routing
+- Create `src/middleware.ts` with locale detection and redirect logic
+- Use `next-intl` or Next.js built-in i18n for locale-aware Link components
+- Validate all internal links include the correct locale prefix
+- Map each locale route to its Next.js equivalent
+
+**Internal link validation**: Check `ir_capture` `internalLinks` against detected locales. Links missing locale prefixes will break in the migrated site.
+
+### 5.6 Install Additional shadcn Components
+
+Based on `ir_capture` `uiPatterns` data, install any remaining shadcn components:
+
+```bash
+# Example: ir_capture returned uiPatterns with Dialog, Table, Tabs
+bunx shadcn@latest add dialog table tabs accordion -y
+```
+
+**VERIFY**: All components listed in `uiPatterns.shadcnComponentsNeeded` are installed.
+
+### 5.7 Copy Assets
 
 ```bash
 mkdir -p <next-project>/public
@@ -436,6 +503,50 @@ borderWidth: "1px" → border
 borderColor: "rgb(229,231,235)" → border-gray-200
 ```
 
+**Font Style**:
+```
+fontStyle: "italic" → italic
+fontStyle: "normal" → not-italic
+```
+
+**Text Transform**:
+```
+textTransform: "uppercase" → uppercase
+textTransform: "lowercase" → lowercase
+textTransform: "capitalize" → capitalize
+textTransform: "none" → normal-case
+```
+
+**Text Decoration**:
+```
+textDecoration: "underline" → underline
+textDecoration: "line-through" → line-through
+textDecoration: "none" → no-underline
+```
+
+**Overflow**:
+```
+overflow: "hidden" → overflow-hidden
+overflow: "auto" → overflow-auto
+overflow: "scroll" → overflow-scroll
+overflowX: "auto" → overflow-x-auto
+overflowY: "hidden" → overflow-y-hidden
+```
+
+**Grid**:
+```
+gridTemplateColumns: "repeat(3, 1fr)" → grid-cols-3
+gridTemplateColumns: "repeat(4, minmax(0, 1fr))" → grid-cols-4
+gridTemplateColumns: "200px 1fr" → grid-cols-[200px_1fr]
+```
+
+**Transform**:
+```
+transform: "translateX(-50%)" → -translate-x-1/2
+transform: "rotate(45deg)" → rotate-45
+transform: "scale(1.1)" → scale-110
+```
+
 **Effects**:
 ```
 opacity: "0.5" → opacity-50
@@ -505,6 +616,106 @@ import { AnimatePresence, motion } from 'framer-motion';
 </AnimatePresence>
 ```
 
+#### Font Migration (using ir_capture font data)
+
+Read font data from `ir_capture` response (`fonts` section). For each detected font family:
+
+**Google Fonts → `next/font/google`:**
+```tsx
+import { Inter, Roboto } from 'next/font/google';
+
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '700'],  // from fonts[].weight
+  style: ['normal', 'italic'],  // from fonts[].style
+  display: 'swap',  // from fonts[].display or default to 'swap'
+  variable: '--font-inter',
+});
+```
+
+**Custom Fonts → `next/font/local`:**
+```tsx
+import localFont from 'next/font/local';
+
+const customFont = localFont({
+  src: [
+    { path: './fonts/custom-regular.woff2', weight: '400', style: 'normal' },
+    { path: './fonts/custom-bold.woff2', weight: '700', style: 'normal' },
+  ],
+  variable: '--font-custom',
+  display: 'swap',
+});
+```
+
+**Apply in `layout.tsx`:**
+```tsx
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en" className={`${inter.variable} ${customFont.variable}`}>
+      <body>{children}</body>
+    </html>
+  );
+}
+```
+
+**Configure in `tailwind.config.ts`:**
+```ts
+fontFamily: {
+  sans: ['var(--font-inter)', ...defaultTheme.fontFamily.sans],
+  custom: ['var(--font-custom)'],
+},
+```
+
+**Download font files**: If `ir_capture` `fonts[].src` contains URLs, download .woff2 files to `public/fonts/` for `next/font/local`.
+
+#### shadcn Component Mapping (from ir_capture uiPatterns)
+
+**MANDATORY**: Use shadcn components instead of raw HTML. Map legacy elements:
+
+| Legacy HTML | shadcn Component | Import |
+|---|---|---|
+| `<button>`, `<input type="submit">` | `<Button>` | `@/components/ui/button` |
+| `<input type="text\|email\|password">` | `<Input>` | `@/components/ui/input` |
+| `<textarea>` | `<Textarea>` | `@/components/ui/textarea` |
+| `<select>` | `<Select>` | `@/components/ui/select` |
+| `<table>` | `<Table>` | `@/components/ui/table` |
+| `<dialog>`, `.modal` | `<Dialog>` | `@/components/ui/dialog` |
+| `<nav>` | `<NavigationMenu>` | `@/components/ui/navigation-menu` |
+| `.card`, `<article>` | `<Card>` | `@/components/ui/card` |
+| `<input type="checkbox">` | `<Checkbox>` | `@/components/ui/checkbox` |
+| `<input type="radio">` | `<RadioGroup>` | `@/components/ui/radio-group` |
+| `.tabs`, `[role="tablist"]` | `<Tabs>` | `@/components/ui/tabs` |
+| `.accordion`, `<details>` | `<Accordion>` | `@/components/ui/accordion` |
+| `.breadcrumb` | `<Breadcrumb>` | `@/components/ui/breadcrumb` |
+| `.pagination` | `<Pagination>` | `@/components/ui/pagination` |
+
+**Example conversion:**
+```tsx
+// WRONG - raw HTML
+<button className="bg-red-600 text-white px-4 py-2 rounded">Submit</button>
+
+// CORRECT - shadcn Button
+import { Button } from "@/components/ui/button";
+<Button className="bg-red-600 text-white">Submit</Button>
+```
+
+```tsx
+// WRONG - raw HTML table
+<table><tr><td>Name</td></tr></table>
+
+// CORRECT - shadcn Table
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+<Table>
+  <TableBody>
+    <TableRow>
+      <TableCell>Name</TableCell>
+    </TableRow>
+  </TableBody>
+</Table>
+```
+
+**Raw HTML elements (`<button>`, `<input>`, `<table>`, `<dialog>`) are FORBIDDEN outside `src/components/ui/`.**
+
 #### Step 4: Code Quality Gate
 
 **BEFORE visual validation**, verify no anti-patterns:
@@ -545,6 +756,42 @@ grep -r "from ['\"]jquery['\"]" <next-project>/src/
 grep -r "require.*jquery" <next-project>/src/
 ```
 **MUST RETURN**: No results
+
+```bash
+# No raw @font-face in CSS (must use next/font)
+grep -r "@font-face" <next-project>/src/
+```
+**MUST RETURN**: No results (use `next/font/google` or `next/font/local` instead)
+
+```bash
+# No raw <button> outside components/ui/ (must use shadcn Button)
+grep -rn '<button' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+```
+**MUST RETURN**: No results (REVIEW any matches — should use `<Button>` from shadcn)
+
+```bash
+# No raw <input outside components/ui/ (must use shadcn Input)
+grep -rn '<input' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+```
+**MUST RETURN**: No results (REVIEW any matches — should use `<Input>` from shadcn)
+
+```bash
+# No raw <table> outside components/ui/ (must use shadcn Table)
+grep -rn '<table' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+```
+**MUST RETURN**: No results
+
+```bash
+# No raw <dialog> outside components/ui/ (must use shadcn Dialog)
+grep -rn '<dialog' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+```
+**MUST RETURN**: No results
+
+```bash
+# Verify shadcn components ARE being used
+grep -rn "from ['\"]@/components/ui/" <next-project>/src/ --include="*.tsx"
+```
+**SHOULD RETURN**: Multiple matches showing shadcn imports in page/component files.
 
 **IF ANY CHECK FAILS**: Fix before proceeding.
 
@@ -627,6 +874,16 @@ ir_capture(port: number, route?: string, viewport?: {width, height})
   - `animatedElements`: Elements with animations (selector, name, duration, easing, delay)
   - `transitionElements`: Elements with transitions (selector, property, duration, easing)
   - `jQueryAnimations`: Detected jQuery animation patterns
+- **Font data** (`fonts`):
+  - `totalFontFaces`: Number of @font-face declarations
+  - `fontFaces`: Array of { family, src URLs, weight, style, display, formats }
+  - `uniqueFamilies`: Deduplicated font family names
+- **UI patterns** (`uiPatterns`):
+  - `totalPatterns`: Total HTML elements matching UI patterns
+  - `patterns`: Array of { type, selector, count, shadcnComponent, htmlSnippet }
+  - `shadcnComponentsNeeded`: List of shadcn components to install
+- **Redirects** (`redirects`): Array of { from, to, statusCode } — useful for locale detection
+- **Internal links** (`internalLinks`): { total, links[] } — for route validation
 
 **Using animation data for migration:**
 ```tsx
@@ -650,7 +907,7 @@ Start watch mode for visual validation.
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
-Returns: Initial diff and first issue.
+Returns: Initial diff, first issue, and `localeConfig` (if locales detected in routes).
 
 ### ir_next
 Get next issue to fix. Blocks during rebuild.

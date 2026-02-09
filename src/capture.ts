@@ -6,7 +6,7 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
-import type { ElementIR, PageIR, ComputedStyles, BoundingBox } from './types.js';
+import type { ElementIR, PageIR, ComputedStyles, BoundingBox, FontFaceDeclaration, DetectedUIPattern, RedirectEntry } from './types.js';
 
 let browser: Browser | null = null;
 
@@ -111,6 +111,9 @@ const STYLE_PROPERTIES: (keyof ComputedStyles)[] = [
   'color',
   'textAlign',
   'letterSpacing',
+  'fontStyle',
+  'textTransform',
+  'textDecoration',
 
   // Visual
   'opacity',
@@ -201,11 +204,40 @@ export async function capturePage(
   const url = `http://localhost:${port}${route}`;
 
   try {
+    // Track redirects
+    const redirects: RedirectEntry[] = [];
+    page.on('response', (response) => {
+      const status = response.status();
+      if (status >= 300 && status < 400) {
+        const location = response.headers()['location'];
+        if (location) {
+          redirects.push({
+            from: response.url(),
+            to: location,
+            statusCode: status,
+          });
+        }
+      }
+    });
+
     // 1. Navigate and wait for network idle
-    await page.goto(url, {
+    const navResponse = await page.goto(url, {
       waitUntil: 'networkidle',
       timeout: 30000,
     });
+
+    // Detect JS-based redirects (final URL differs from requested)
+    const finalUrl = page.url();
+    if (finalUrl !== url && navResponse) {
+      const alreadyTracked = redirects.some((r) => r.to === finalUrl || r.from === url);
+      if (!alreadyTracked) {
+        redirects.push({
+          from: url,
+          to: finalUrl,
+          statusCode: 302,
+        });
+      }
+    }
 
     // 2. Force all lazy images to load
     await page.evaluate(() => {
@@ -244,6 +276,48 @@ export async function capturePage(
 
     // 4. Wait for fonts to load
     await page.evaluate(() => document.fonts.ready);
+
+    // 4b. Extract @font-face declarations
+    const fontDeclarations = await page.evaluate((): FontFaceDeclaration[] => {
+      const fonts: FontFaceDeclaration[] = [];
+      for (const sheet of document.styleSheets) {
+        try {
+          for (const rule of sheet.cssRules) {
+            if (rule instanceof CSSFontFaceRule) {
+              const style = rule.style;
+              const family = (style.getPropertyValue('font-family') || '').replace(/['"]/g, '').trim();
+              if (!family) continue;
+
+              const srcValue = style.getPropertyValue('src') || '';
+              const srcUrls: string[] = [];
+              const formats: string[] = [];
+
+              const urlMatches = srcValue.matchAll(/url\(['"]?([^'")\s]+)['"]?\)/g);
+              for (const m of urlMatches) {
+                srcUrls.push(m[1]);
+              }
+
+              const formatMatches = srcValue.matchAll(/format\(['"]?([^'")\s]+)['"]?\)/g);
+              for (const m of formatMatches) {
+                formats.push(m[1]);
+              }
+
+              fonts.push({
+                family,
+                src: srcUrls,
+                weight: style.getPropertyValue('font-weight') || undefined,
+                style: style.getPropertyValue('font-style') || undefined,
+                display: style.getPropertyValue('font-display') || undefined,
+                formats,
+              });
+            }
+          }
+        } catch {
+          // Cross-origin stylesheet, skip
+        }
+      }
+      return fonts;
+    });
 
     // Wait for network to settle again after lazy loading
     await page.waitForLoadState('networkidle');
@@ -549,6 +623,90 @@ export async function capturePage(
 
     const root = processElement(result.rootData);
 
+    // Detect UI patterns for shadcn component mapping
+    const uiPatterns = await page.evaluate((): DetectedUIPattern[] => {
+      const patterns: Array<{
+        type: string;
+        selectors: string[];
+        shadcnComponent: string;
+      }> = [
+        { type: 'button', selectors: ['button', '[role="button"]', 'input[type="submit"]'], shadcnComponent: 'Button' },
+        { type: 'input', selectors: ['input[type="text"]', 'input[type="email"]', 'input[type="password"]', 'input[type="search"]', 'input[type="tel"]', 'input[type="url"]', 'input[type="number"]'], shadcnComponent: 'Input' },
+        { type: 'textarea', selectors: ['textarea'], shadcnComponent: 'Textarea' },
+        { type: 'select', selectors: ['select'], shadcnComponent: 'Select' },
+        { type: 'dialog', selectors: ['dialog', '[role="dialog"]', '.modal'], shadcnComponent: 'Dialog' },
+        { type: 'table', selectors: ['table'], shadcnComponent: 'Table' },
+        { type: 'form', selectors: ['form'], shadcnComponent: 'Form' },
+        { type: 'navbar', selectors: ['nav', '[role="navigation"]'], shadcnComponent: 'NavigationMenu' },
+        { type: 'tabs', selectors: ['[role="tablist"]', '.tabs'], shadcnComponent: 'Tabs' },
+        { type: 'accordion', selectors: ['.accordion', 'details'], shadcnComponent: 'Accordion' },
+        { type: 'card', selectors: ['.card', 'article'], shadcnComponent: 'Card' },
+        { type: 'checkbox', selectors: ['input[type="checkbox"]'], shadcnComponent: 'Checkbox' },
+        { type: 'radio', selectors: ['input[type="radio"]'], shadcnComponent: 'RadioGroup' },
+        { type: 'breadcrumb', selectors: ['.breadcrumb', '[aria-label="breadcrumb"]'], shadcnComponent: 'Breadcrumb' },
+        { type: 'pagination', selectors: ['.pagination'], shadcnComponent: 'Pagination' },
+        { type: 'tooltip', selectors: ['[data-tooltip]', '[title]'], shadcnComponent: 'Tooltip' },
+      ];
+
+      const results: DetectedUIPattern[] = [];
+
+      for (const pattern of patterns) {
+        const selectorStr = pattern.selectors.join(', ');
+        const els = document.querySelectorAll(selectorStr);
+        if (els.length > 0) {
+          const first = els[0] as HTMLElement;
+          const snippet = first.outerHTML.slice(0, 200);
+          // Build a readable selector for the first instance
+          let sel = first.tagName.toLowerCase();
+          if (first.id) sel = `#${first.id}`;
+          else if (first.className && typeof first.className === 'string') {
+            const cls = first.className.split(/\s+/).slice(0, 2).join('.');
+            if (cls) sel += `.${cls}`;
+          }
+
+          results.push({
+            type: pattern.type as any,
+            selector: sel,
+            count: els.length,
+            shadcnComponent: pattern.shadcnComponent,
+            htmlSnippet: snippet,
+          });
+        }
+      }
+
+      return results;
+    });
+
+    // Extract internal links
+    const internalLinks = await page.evaluate((pageUrl: string): string[] => {
+      const links = new Set<string>();
+      const baseHost = new URL(pageUrl).host;
+
+      document.querySelectorAll('a[href]').forEach((a) => {
+        const href = a.getAttribute('href');
+        if (!href) return;
+        try {
+          const resolved = new URL(href, pageUrl);
+          if (resolved.host === baseHost) {
+            let path = resolved.pathname;
+            if (path !== '/' && path.endsWith('/')) {
+              path = path.slice(0, -1);
+            }
+            if (!path.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|pdf|zip)$/i)) {
+              links.add(path);
+            }
+          }
+        } catch {
+          // relative path without base
+          if (href.startsWith('/')) {
+            links.add(href.split('?')[0].split('#')[0]);
+          }
+        }
+      });
+
+      return Array.from(links);
+    }, url);
+
     return {
       url,
       route,
@@ -559,6 +717,10 @@ export async function capturePage(
       breakpoints: [], // Filled by viewport detection module
       meta: result.meta,
       animations: animationData,
+      fonts: fontDeclarations.length > 0 ? fontDeclarations : undefined,
+      uiPatterns: uiPatterns.length > 0 ? uiPatterns : undefined,
+      redirects: redirects.length > 0 ? redirects : undefined,
+      internalLinks: internalLinks.length > 0 ? internalLinks : undefined,
     };
   } finally {
     await context.close();
