@@ -276,6 +276,25 @@ function createServer(): Server {
                       transitionElements: pageIR.animations.transitionElements.slice(0, 20),
                       jQueryAnimations: pageIR.animations.jQueryAnimations,
                     } : null,
+                    // CLS (Cumulative Layout Shift) data
+                    cls: pageIR.cls ? {
+                      score: pageIR.cls.score,
+                      rating: pageIR.cls.rating,
+                      shiftCount: pageIR.cls.shifts.length,
+                      topShifters: pageIR.cls.shifts
+                        .sort((a, b) => b.value - a.value)
+                        .slice(0, 5)
+                        .map((s) => ({
+                          value: s.value,
+                          elements: s.sources.map((src) => ({
+                            selector: src.selector,
+                            tag: src.tag,
+                            movedFrom: { x: Math.round(src.previousRect.x), y: Math.round(src.previousRect.y) },
+                            movedTo: { x: Math.round(src.currentRect.x), y: Math.round(src.currentRect.y) },
+                            deltaY: Math.round(src.currentRect.y - src.previousRect.y),
+                          })),
+                        })),
+                    } : null,
                     // Full elements available via ir_element for deep-dive
                     message: 'Use ir_element for element details. Animation data includes @keyframes, durations, easing for recreation in Framer Motion or CSS.',
                   },

@@ -6,7 +6,7 @@
  */
 
 import { chromium, Browser, Page } from 'playwright';
-import type { ElementIR, PageIR, ComputedStyles, BoundingBox } from './types.js';
+import type { ElementIR, PageIR, ComputedStyles, BoundingBox, CLSData, LayoutShiftEntry } from './types.js';
 
 let browser: Browser | null = null;
 
@@ -201,6 +201,57 @@ export async function capturePage(
   const url = `http://localhost:${port}${route}`;
 
   try {
+    // 0. Inject CLS observer BEFORE navigation (runs before any page script)
+    await page.addInitScript(() => {
+      (window as any).__clsEntries = [];
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const lse = entry as any;
+          // Only count shifts NOT caused by recent user input
+          if (!lse.hadRecentInput) {
+            (window as any).__clsEntries.push({
+              value: lse.value,
+              sources: (lse.sources || []).map((s: any) => {
+                const node = s.node as Element | null;
+                let selector = '';
+                let tag = '';
+                if (node) {
+                  tag = node.tagName?.toLowerCase() || '';
+                  if (node.id) {
+                    selector = `#${node.id}`;
+                  } else {
+                    selector = tag;
+                    const cls = node.className;
+                    if (cls && typeof cls === 'string') {
+                      const first = cls.split(/\s+/).slice(0, 2).join('.');
+                      if (first) selector += `.${first}`;
+                    }
+                  }
+                }
+                return {
+                  selector,
+                  tag,
+                  previousRect: s.previousRect ? {
+                    x: s.previousRect.x,
+                    y: s.previousRect.y,
+                    width: s.previousRect.width,
+                    height: s.previousRect.height,
+                  } : { x: 0, y: 0, width: 0, height: 0 },
+                  currentRect: s.currentRect ? {
+                    x: s.currentRect.x,
+                    y: s.currentRect.y,
+                    width: s.currentRect.width,
+                    height: s.currentRect.height,
+                  } : { x: 0, y: 0, width: 0, height: 0 },
+                };
+              }),
+            });
+          }
+        }
+      });
+      observer.observe({ type: 'layout-shift', buffered: true });
+    });
+
     // 1. Navigate and wait for network idle
     await page.goto(url, {
       waitUntil: 'networkidle',
@@ -378,6 +429,18 @@ export async function capturePage(
         resolve();
       }, 300);
     }));
+
+    // 8. Read back CLS data
+    const clsEntries = await page.evaluate((): LayoutShiftEntry[] => {
+      return (window as any).__clsEntries || [];
+    });
+
+    const clsScore = clsEntries.reduce((sum, e) => sum + e.value, 0);
+    const clsData: CLSData | undefined = clsEntries.length > 0 ? {
+      score: Math.round(clsScore * 10000) / 10000,
+      shifts: clsEntries,
+      rating: clsScore <= 0.1 ? 'good' : clsScore <= 0.25 ? 'needs-improvement' : 'poor',
+    } : undefined;
 
     // Capture the page
     const result = await page.evaluate(
@@ -559,6 +622,7 @@ export async function capturePage(
       breakpoints: [], // Filled by viewport detection module
       meta: result.meta,
       animations: animationData,
+      cls: clsData,
     };
   } finally {
     await context.close();

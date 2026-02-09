@@ -20,6 +20,9 @@ export type {
   DiscoveredRoute,
   WatchStatus,
   WatchState,
+  CLSData,
+  LayoutShiftEntry,
+  LayoutShiftSource,
 } from './types.js';
 
 // Capture
