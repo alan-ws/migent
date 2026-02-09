@@ -548,27 +548,7 @@ grep -r "require.*jquery" <next-project>/src/
 
 **IF ANY CHECK FAILS**: Fix before proceeding.
 
-#### Step 5: CLS Check
-
-Before visual validation, check CLS on the Next.js page:
-```
-ir_capture(port: 3000, route: "<route>")
-```
-
-Check the `cls` field in the response:
-- `cls.rating: "good"` (score <= 0.1) → Proceed
-- `cls.rating: "needs-improvement"` (score <= 0.25) → Fix before continuing
-- `cls.rating: "poor"` (score > 0.25) → MUST fix, this is a Core Web Vitals failure
-
-**Common CLS fixes:**
-- **Font shift** (text elements move after font loads): Use `next/font` with `display: 'swap'` and `adjustFontFallback: true`. Apply font via CSS variable on `<html>`.
-- **Image shift** (content pushes down when image loads): Use `next/image` with explicit `width` and `height` props. Never use `<img>` without dimensions.
-- **Dynamic content shift** (injected content pushes existing elements): Reserve space with min-height or skeleton placeholders matching the final content size.
-- **Ad/embed shift**: Wrap third-party embeds in a container with fixed aspect-ratio.
-
-**Compare with legacy**: If `ir_capture` on the legacy site shows `cls.score: 0.05` and Next.js shows `cls.score: 0.18`, that's a regression. The `ir_start` diff will flag this automatically as a layout issue.
-
-#### Step 6: Visual Validation
+#### Step 5: Visual Validation (CLS gate is enforced automatically)
 
 Start watch mode:
 ```
@@ -577,9 +557,20 @@ ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", next
 
 Loop until match >= 95%:
 ```
-issue = ir_next()
+result = ir_next()
 
-IF issue exists:
+IF result.clsBlocked:
+  - CLS score is above 0.1 — ir_next REFUSES to serve other issues
+  - Read result.cls.topShifters to identify which elements shifted
+  - Fix using result.suggestedFixes:
+    1. Font shift → next/font with display: "swap", adjustFontFallback: true
+    2. Image shift → next/image with explicit width + height
+    3. Dynamic content → min-height or skeleton placeholders
+    4. Embeds → fixed aspect-ratio container
+  - Save file → watch recaptures → call ir_next again
+  - Repeat until clsBlocked is gone
+
+IF result.issue exists:
   - Read issue details (selector, styles, position)
   - Fix the specific issue using Tailwind
   - Save file
@@ -591,19 +582,20 @@ IF match >= 95%:
   - Move to next route
 ```
 
-#### Step 7: Final Verification
+**CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
+
+#### Step 6: Final Verification
 
 ```
 ir_status()
 ```
 
-Confirm match >= 95% before marking complete.
+Confirm ALL of:
+- `match >= 95%`
+- `clsBlocked: false`
+- `clsRating: "good"`
 
-Re-check CLS on the completed route:
-```
-ir_capture(port: 3000, route: "<route>")
-```
-Confirm `cls.rating` is `"good"` (score <= 0.1). If not, fix remaining shifts before marking complete.
+before marking route complete.
 
 ---
 

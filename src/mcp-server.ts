@@ -456,6 +456,48 @@ function createServer(): Server {
             };
           }
 
+          // Check CLS gate — block until CLS is "good"
+          const nextCLS = state.lastDiff.cls?.next;
+          if (nextCLS && nextCLS.rating !== 'good') {
+            const topShifters = nextCLS.shifts
+              .sort((a, b) => b.value - a.value)
+              .slice(0, 3)
+              .map((s) => ({
+                value: s.value,
+                elements: s.sources.map((src) => ({
+                  selector: src.selector || src.tag,
+                  deltaY: Math.round(src.currentRect.y - src.previousRect.y),
+                })),
+              }));
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      clsBlocked: true,
+                      message: `CLS BLOCKED: Score ${nextCLS.score.toFixed(3)} (${nextCLS.rating}). Must be <= 0.1 ("good") to proceed. Fix layout shifts first.`,
+                      cls: {
+                        score: nextCLS.score,
+                        rating: nextCLS.rating,
+                        topShifters,
+                      },
+                      suggestedFixes: [
+                        'Use next/font with display: "swap" and adjustFontFallback: true for all fonts',
+                        'Use next/image with explicit width and height for all images',
+                        'Add min-height or skeleton placeholders for dynamically loaded content',
+                        'Wrap third-party embeds in fixed aspect-ratio containers',
+                      ],
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           // Get next issue
           const issue = getNextIssue();
           const remaining = getRemainingIssueCount();
@@ -551,6 +593,9 @@ function createServer(): Server {
                     },
                     regressionBlocked: state.regressionDetected,
                     regressionCount: state.regressionCount,
+                    clsBlocked: state.lastDiff.cls?.next ? state.lastDiff.cls.next.rating !== 'good' : false,
+                    clsScore: state.lastDiff.cls?.next?.score ?? null,
+                    clsRating: state.lastDiff.cls?.next?.rating ?? null,
                     stats: state.lastDiff.stats,
                   },
                   null,

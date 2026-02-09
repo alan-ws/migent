@@ -200,6 +200,10 @@ export function diffPages(legacy: PageIR, next: PageIR): DiffResult {
       extraInNext: extraCount,
       styleDifferences: styleIssues,
     },
+    cls: (legacy.cls || next.cls) ? {
+      legacy: legacy.cls,
+      next: next.cls,
+    } : undefined,
   };
 }
 

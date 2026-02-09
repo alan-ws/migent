@@ -360,6 +360,12 @@ export interface DiffResult {
     extraInNext: number;
     styleDifferences: number;
   };
+
+  /** CLS scores from both sites (for blocking gate) */
+  cls?: {
+    legacy?: CLSData;
+    next?: CLSData;
+  };
 }
 
 // ============================================================================
