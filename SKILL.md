@@ -21,22 +21,22 @@ This skill migrates legacy websites to modern Next.js. You MUST follow every ste
 Run each command and verify it succeeds:
 
 ```bash
-npx skills add https://github.com/vercel-labs/agent-skills --skill vercel-react-best-practices
+npx skills add https://github.com/vercel-labs/agent-skills --skill vercel-react-best-practices --yes
 ```
 **VERIFY**: Command outputs success message.
 
 ```bash
-npx skills add https://github.com/vercel-labs/next-skills --skill next-best-practices
+npx skills add https://github.com/vercel-labs/next-skills --skill next-best-practices --yes
 ```
 **VERIFY**: Command outputs success message.
 
 ```bash
-npx skills add https://github.com/vercel-labs/next-skills --skill next-cache-components
+npx skills add https://github.com/vercel-labs/next-skills --skill next-cache-components --yes
 ```
 **VERIFY**: Command outputs success message.
 
 ```bash
-npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-guidelines
+npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-guidelines --yes
 ```
 **VERIFY**: Command outputs success message.
 
@@ -78,6 +78,8 @@ Ask the user these questions:
 3. **"What should I name the Next.js project?"**
    - Suggest: `<legacy-name>-next`
 
+**IMPORTANT**: Always the latest Next.js (check for version). Any styles (included design systems) need to be latest tailwindcss and include shadcn (check versions).
+
 ### 2.2 Validate Answers
 
 **BEFORE PROCEEDING**, verify:
@@ -96,13 +98,138 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:<port>/
 
 **IF VALIDATION FAILS**: Return to user with specific error. Do not guess or proceed.
 
+**CAPTURE**: any observed request patterns. Example: Redirect to /en; this would mean the site has implemented localisation and we would need to include localisation in the migration plan.
+
 ---
 
-## PHASE 3: DISCOVERY (USING MIGENT)
+## PHASE 3: PROJECT SETUP
+
+**INVOKE `/next-best-practices` SKILL BEFORE STARTING THIS PHASE.**
+
+### 3.1 Load Best Practices
+
+```
+/next-best-practices
+```
+
+**VERIFY**: Skill context is loaded. Read and understand the guidelines.
+
+### 3.2 Create Next.js Project
+
+Use the latest Next.js with modern tooling:
+
+```bash
+bunx create-next-app@latest <project-name> \
+  --typescript \
+  --tailwind \
+  --app \
+  --src-dir \
+  --import-alias "@/*" \
+  --use-bun \
+  --yes
+```
+
+**NOTE**:
+- Use `bun`, not `npm`
+- Use `bunx`, not `npx`
+- ESLint is NOT included - we use Biome
+
+### 3.3 Install Biome
+
+```bash
+cd <project-name>
+bun add -D @biomejs/biome
+```
+
+Create `biome.json`:
+```json
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "organizeImports": { "enabled": true },
+  "linter": {
+    "enabled": true,
+    "rules": { "recommended": true }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2
+  }
+}
+```
+
+### 3.4 Install Framer Motion (if animations detected)
+
+If Phase 3 found jQuery animations or CSS animations:
+```bash
+bun add framer-motion
+```
+
+### 3.5 Configure MCP
+
+Create `.mcp.json` in the **workspace root** (the directory you opened in your editor / where Claude Code runs), **NOT** inside the Next.js project directory:
+
+```
+workspace/              ← .mcp.json goes HERE
+├── legacy-site/
+├── my-next-app/
+└── .mcp.json
+```
+
+```json
+{
+  "mcpServers": {
+    "migent": {
+      "command": "npx",
+      "args": ["-y", "migent", "mcp"]
+    }
+  }
+}
+```
+
+**IMPORTANT**: If `.mcp.json` is placed inside the Next.js project directory, Claude Code will not detect it. It must be at the workspace root.
+
+### 3.6 Test MCP Configuration
+
+Start the Next.js dev server:
+```bash
+bun run dev
+```
+
+Then test MCP works with Next.js:
+```
+ir_capture(port: 3000, route: "/")
+```
+
+**VERIFY**: Returns captured IR for the default Next.js page.
+
+---
+
+## PHASE 4: SERVER MANAGEMENT
+
+### 4.1 Verify Both Sites Running
+
+Legacy site:
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:<legacy-port>/
+```
+**MUST RETURN**: `200`
+
+Next.js site:
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/
+```
+**MUST RETURN**: `200`
+
+**IF EITHER FAILS**: Do not proceed. Fix server issues first.
+
+---
+
+## PHASE 5: DISCOVERY (USING MIGENT)
 
 **YOU MUST USE MIGENT MCP TOOLS. DO NOT USE CURL. DO NOT FETCH HTML MANUALLY.**
 
-### 3.1 Test MCP Connection
+### 5.1 Test MCP Connection
 
 Call the MCP tool:
 ```
@@ -113,14 +240,14 @@ ir_capture(port: <legacy-port>, route: "/")
 
 **IF THIS FAILS**: The MCP server is not running. Stop and report to user.
 
-### 3.2 Discover Routes
+### 5.2 Discover Routes
 
 Analyze legacy codebase to find all routes:
 - Check `sitemap.xml` if exists
 - Check router files (Express routes, Next.js pages, PHP files)
 - Check navigation links in captured IR
 
-### 3.3 Capture All Routes
+### 5.3 Capture All Routes
 
 For EACH discovered route, call:
 ```
@@ -148,7 +275,13 @@ Save results to `migration.json`:
 }
 ```
 
-### 3.4 Analyze JavaScript Patterns
+### 5.4 Analyze JavaScript Patterns
+
+**INVOKE `/vercel-react-best-practices` SKILL BEFORE STARTING THIS PHASE**.
+
+**IMPORTANT**: Legacy JavaScript is ANYTHING that is NOT React or Next.js.
+
+**EXAMPLES**: Sub-set of patterns to review.
 
 Search legacy codebase for patterns that need conversion:
 
@@ -164,7 +297,7 @@ grep -r "onclick=\|onsubmit=\|onchange=" <legacy-directory> --include="*.html" -
 
 Document findings in `migration.json` under `legacy.javascript`.
 
-### 3.5 Copy Assets
+### 5.5 Copy Assets
 
 ```bash
 mkdir -p <next-project>/public
@@ -172,118 +305,6 @@ cp -r <legacy-directory>/images/* <next-project>/public/images/ 2>/dev/null || t
 cp -r <legacy-directory>/fonts/* <next-project>/public/fonts/ 2>/dev/null || true
 cp -r <legacy-directory>/assets/* <next-project>/public/assets/ 2>/dev/null || true
 ```
-
----
-
-## PHASE 4: PROJECT SETUP
-
-**INVOKE `/next-best-practices` SKILL BEFORE STARTING THIS PHASE.**
-
-### 4.1 Load Best Practices
-
-```
-/next-best-practices
-```
-
-**VERIFY**: Skill context is loaded. Read and understand the guidelines.
-
-### 4.2 Create Next.js Project
-
-Use the latest Next.js with modern tooling:
-
-```bash
-bunx create-next-app@latest <project-name> \
-  --typescript \
-  --tailwind \
-  --app \
-  --src-dir \
-  --import-alias "@/*" \
-  --use-bun
-```
-
-**NOTE**:
-- Use `bun`, not `npm`
-- Use `bunx`, not `npx`
-- ESLint is NOT included - we use Biome
-
-### 4.3 Install Biome
-
-```bash
-cd <project-name>
-bun add -D @biomejs/biome
-```
-
-Create `biome.json`:
-```json
-{
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "organizeImports": { "enabled": true },
-  "linter": {
-    "enabled": true,
-    "rules": { "recommended": true }
-  },
-  "formatter": {
-    "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 2
-  }
-}
-```
-
-### 4.4 Install Framer Motion (if animations detected)
-
-If Phase 3 found jQuery animations or CSS animations:
-```bash
-bun add framer-motion
-```
-
-### 4.5 Configure MCP
-
-Create `.mcp.json` in project root:
-```json
-{
-  "mcpServers": {
-    "migent": {
-      "command": "npx",
-      "args": ["-y", "migent", "mcp"]
-    }
-  }
-}
-```
-
-### 4.6 Test MCP Configuration
-
-Start the Next.js dev server:
-```bash
-bun run dev
-```
-
-Then test MCP works with Next.js:
-```
-ir_capture(port: 3000, route: "/")
-```
-
-**VERIFY**: Returns captured IR for the default Next.js page.
-
----
-
-## PHASE 5: SERVER MANAGEMENT
-
-### 5.1 Verify Both Sites Running
-
-Legacy site:
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:<legacy-port>/
-```
-**MUST RETURN**: `200`
-
-Next.js site:
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/
-```
-**MUST RETURN**: `200`
-
-**IF EITHER FAILS**: Do not proceed. Fix server issues first.
 
 ---
 

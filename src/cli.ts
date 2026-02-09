@@ -133,6 +133,7 @@ Usage:
   migent --legacy PORT --next PORT [options]    One-shot diff
   migent watch --legacy PORT --next PORT        Watch mode (continuous)
   migent discover --legacy PORT                 Discover routes
+  migent mcp                                    Start MCP server (stdio)
   migent --help                                 Show this help
 
 Options:
@@ -159,7 +160,7 @@ Examples:
   migent discover --legacy 8000
 
 MCP Server:
-  node dist/mcp-server.js
+  migent mcp                Start MCP server (stdio transport)
 `);
 }
 
@@ -209,6 +210,12 @@ async function main(): Promise<void> {
       console.log(`   ${breakpoints.join('px, ')}px\n`);
 
       process.exit(0);
+    }
+
+    // MCP server mode
+    if (args._command === 'mcp') {
+      await import('./mcp-server.js');
+      return;
     }
 
     // Validate required args
