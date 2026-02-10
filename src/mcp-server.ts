@@ -276,6 +276,25 @@ function createServer(): Server {
                       transitionElements: pageIR.animations.transitionElements.slice(0, 20),
                       jQueryAnimations: pageIR.animations.jQueryAnimations,
                     } : null,
+                    // CLS (Cumulative Layout Shift) data
+                    cls: pageIR.cls ? {
+                      score: pageIR.cls.score,
+                      rating: pageIR.cls.rating,
+                      shiftCount: pageIR.cls.shifts.length,
+                      topShifters: pageIR.cls.shifts
+                        .sort((a, b) => b.value - a.value)
+                        .slice(0, 5)
+                        .map((s) => ({
+                          value: s.value,
+                          elements: s.sources.map((src) => ({
+                            selector: src.selector,
+                            tag: src.tag,
+                            movedFrom: { x: Math.round(src.previousRect.x), y: Math.round(src.previousRect.y) },
+                            movedTo: { x: Math.round(src.currentRect.x), y: Math.round(src.currentRect.y) },
+                            deltaY: Math.round(src.currentRect.y - src.previousRect.y),
+                          })),
+                        })),
+                    } : null,
                     // Full elements available via ir_element for deep-dive
                     message: 'Use ir_element for element details. Animation data includes @keyframes, durations, easing for recreation in Framer Motion or CSS.',
                   },
@@ -437,6 +456,48 @@ function createServer(): Server {
             };
           }
 
+          // Check CLS gate — block until CLS is "good"
+          const nextCLS = state.lastDiff.cls?.next;
+          if (nextCLS && nextCLS.rating !== 'good') {
+            const topShifters = nextCLS.shifts
+              .sort((a, b) => b.value - a.value)
+              .slice(0, 3)
+              .map((s) => ({
+                value: s.value,
+                elements: s.sources.map((src) => ({
+                  selector: src.selector || src.tag,
+                  deltaY: Math.round(src.currentRect.y - src.previousRect.y),
+                })),
+              }));
+
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(
+                    {
+                      clsBlocked: true,
+                      message: `CLS BLOCKED: Score ${nextCLS.score.toFixed(3)} (${nextCLS.rating}). Must be <= 0.1 ("good") to proceed. Fix layout shifts first.`,
+                      cls: {
+                        score: nextCLS.score,
+                        rating: nextCLS.rating,
+                        topShifters,
+                      },
+                      suggestedFixes: [
+                        'Use next/font with display: "swap" and adjustFontFallback: true for all fonts',
+                        'Use next/image with explicit width and height for all images',
+                        'Add min-height or skeleton placeholders for dynamically loaded content',
+                        'Wrap third-party embeds in fixed aspect-ratio containers',
+                      ],
+                    },
+                    null,
+                    2
+                  ),
+                },
+              ],
+            };
+          }
+
           // Get next issue
           const issue = getNextIssue();
           const remaining = getRemainingIssueCount();
@@ -532,6 +593,9 @@ function createServer(): Server {
                     },
                     regressionBlocked: state.regressionDetected,
                     regressionCount: state.regressionCount,
+                    clsBlocked: state.lastDiff.cls?.next ? state.lastDiff.cls.next.rating !== 'good' : false,
+                    clsScore: state.lastDiff.cls?.next?.score ?? null,
+                    clsRating: state.lastDiff.cls?.next?.rating ?? null,
                     stats: state.lastDiff.stats,
                   },
                   null,

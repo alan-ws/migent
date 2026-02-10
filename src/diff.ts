@@ -103,6 +103,58 @@ export function diffPages(legacy: PageIR, next: PageIR): DiffResult {
     }
   }
 
+  // CLS regression check
+  if (next.cls) {
+    const nextCLS = next.cls.score;
+    const legacyCLS = legacy.cls?.score ?? 0;
+
+    // Absolute threshold: Next.js CLS is poor
+    if (nextCLS > 0.25) {
+      const topShifters = next.cls.shifts
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3)
+        .flatMap((s) => s.sources.map((src) => `${src.selector || src.tag} (shifted ${Math.round(s.value * 10000) / 100}%)`));
+
+      issues.push({
+        id: generateIssueId(),
+        severity: 'critical',
+        type: 'layout',
+        message: `CLS score ${nextCLS.toFixed(3)} exceeds "poor" threshold (0.25). Top shifters: ${topShifters.join(', ')}`,
+        legacy: { selector: 'body', rect: { x: 0, y: 0, width: next.viewport.width, height: next.viewport.height }, htmlSnippet: '<body>' },
+        next: { selector: 'body', rect: { x: 0, y: 0, width: next.viewport.width, height: next.viewport.height } },
+        suggestedFix: 'Add explicit dimensions to images (use next/image), preload fonts with next/font (display: swap + adjustFontFallback), and avoid injecting content above existing elements.',
+      });
+    } else if (nextCLS > 0.1) {
+      const topShifters = next.cls.shifts
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 3)
+        .flatMap((s) => s.sources.map((src) => `${src.selector || src.tag} (shifted ${Math.round(s.value * 10000) / 100}%)`));
+
+      issues.push({
+        id: generateIssueId(),
+        severity: 'major',
+        type: 'layout',
+        message: `CLS score ${nextCLS.toFixed(3)} exceeds "needs improvement" threshold (0.1). Top shifters: ${topShifters.join(', ')}`,
+        legacy: { selector: 'body', rect: { x: 0, y: 0, width: next.viewport.width, height: next.viewport.height }, htmlSnippet: '<body>' },
+        next: { selector: 'body', rect: { x: 0, y: 0, width: next.viewport.width, height: next.viewport.height } },
+        suggestedFix: 'Check font loading (next/font with size-adjust), image dimensions (next/image), and dynamic content insertion order.',
+      });
+    }
+
+    // Regression: Next.js CLS is worse than legacy
+    if (nextCLS > legacyCLS + 0.05 && nextCLS > 0.05) {
+      issues.push({
+        id: generateIssueId(),
+        severity: 'major',
+        type: 'layout',
+        message: `CLS regression: Next.js (${nextCLS.toFixed(3)}) is worse than legacy (${legacyCLS.toFixed(3)})`,
+        legacy: { selector: 'body', rect: { x: 0, y: 0, width: legacy.viewport.width, height: legacy.viewport.height }, htmlSnippet: '<body>' },
+        next: { selector: 'body', rect: { x: 0, y: 0, width: next.viewport.width, height: next.viewport.height } },
+        suggestedFix: 'The migrated site has more layout shift than the original. Check: fonts not matched (use next/font), images missing dimensions, or content loading in different order.',
+      });
+    }
+  }
+
   // Process unmatched next elements (extra in next) - usually not an issue
   // but track for stats
   const extraCount = unmatchedNext.filter(isSignificantElement).length;
@@ -148,6 +200,10 @@ export function diffPages(legacy: PageIR, next: PageIR): DiffResult {
       extraInNext: extraCount,
       styleDifferences: styleIssues,
     },
+    cls: (legacy.cls || next.cls) ? {
+      legacy: legacy.cls,
+      next: next.cls,
+    } : undefined,
   };
 }
 

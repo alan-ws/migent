@@ -223,6 +223,40 @@ export interface PageIR {
     /** jQuery animation patterns detected */
     jQueryAnimations: string[];
   };
+
+  /** Cumulative Layout Shift data observed during page load */
+  cls?: CLSData;
+}
+
+// ============================================================================
+// CLS (Cumulative Layout Shift)
+// ============================================================================
+
+export interface LayoutShiftSource {
+  /** CSS selector of the element that shifted */
+  selector: string;
+  /** Tag name */
+  tag: string;
+  /** Position before the shift */
+  previousRect: BoundingBox;
+  /** Position after the shift */
+  currentRect: BoundingBox;
+}
+
+export interface LayoutShiftEntry {
+  /** Individual shift score (fraction of viewport displaced) */
+  value: number;
+  /** Elements that contributed to this shift */
+  sources: LayoutShiftSource[];
+}
+
+export interface CLSData {
+  /** Total CLS score (sum of all non-input-driven shifts) */
+  score: number;
+  /** Individual layout shift entries */
+  shifts: LayoutShiftEntry[];
+  /** Rating based on Core Web Vitals thresholds */
+  rating: 'good' | 'needs-improvement' | 'poor';
 }
 
 // ============================================================================
@@ -325,6 +359,12 @@ export interface DiffResult {
     missingInNext: number;
     extraInNext: number;
     styleDifferences: number;
+  };
+
+  /** CLS scores from both sites (for blocking gate) */
+  cls?: {
+    legacy?: CLSData;
+    next?: CLSData;
   };
 }
 

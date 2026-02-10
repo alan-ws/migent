@@ -1,6 +1,6 @@
 {
   "name": "migent",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Autonomous site migration agent - visual diff tool for legacy to Next.js migrations",
   "type": "module",
   "bin": {

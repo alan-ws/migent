@@ -548,7 +548,7 @@ grep -r "require.*jquery" <next-project>/src/
 
 **IF ANY CHECK FAILS**: Fix before proceeding.
 
-#### Step 5: Visual Validation
+#### Step 5: Visual Validation (CLS gate is enforced automatically)
 
 Start watch mode:
 ```
@@ -557,9 +557,20 @@ ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", next
 
 Loop until match >= 95%:
 ```
-issue = ir_next()
+result = ir_next()
 
-IF issue exists:
+IF result.clsBlocked:
+  - CLS score is above 0.1 — ir_next REFUSES to serve other issues
+  - Read result.cls.topShifters to identify which elements shifted
+  - Fix using result.suggestedFixes:
+    1. Font shift → next/font with display: "swap", adjustFontFallback: true
+    2. Image shift → next/image with explicit width + height
+    3. Dynamic content → min-height or skeleton placeholders
+    4. Embeds → fixed aspect-ratio container
+  - Save file → watch recaptures → call ir_next again
+  - Repeat until clsBlocked is gone
+
+IF result.issue exists:
   - Read issue details (selector, styles, position)
   - Fix the specific issue using Tailwind
   - Save file
@@ -571,13 +582,20 @@ IF match >= 95%:
   - Move to next route
 ```
 
+**CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
+
 #### Step 6: Final Verification
 
 ```
 ir_status()
 ```
 
-Confirm match >= 95% before marking complete.
+Confirm ALL of:
+- `match >= 95%`
+- `clsBlocked: false`
+- `clsRating: "good"`
+
+before marking route complete.
 
 ---
 
@@ -627,6 +645,11 @@ ir_capture(port: number, route?: string, viewport?: {width, height})
   - `animatedElements`: Elements with animations (selector, name, duration, easing, delay)
   - `transitionElements`: Elements with transitions (selector, property, duration, easing)
   - `jQueryAnimations`: Detected jQuery animation patterns
+- **CLS data** (`cls`):
+  - `score`: Total Cumulative Layout Shift score
+  - `rating`: `good` (<=0.1), `needs-improvement` (<=0.25), or `poor` (>0.25)
+  - `shiftCount`: Number of individual layout shifts observed
+  - `topShifters`: Top 5 shifts with element selectors, before/after positions, and deltaY
 
 **Using animation data for migration:**
 ```tsx
