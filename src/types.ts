@@ -130,6 +130,9 @@ export interface ComputedStyles {
   color: string;
   textAlign: string;
   letterSpacing: string;
+  fontStyle: string;
+  textTransform: string;
+  textDecoration: string;
 
   // Visual
   opacity: string;
@@ -157,6 +160,68 @@ export interface ComputedStyles {
   // Shadows
   boxShadow: string;
   textShadow: string;
+}
+
+// ============================================================================
+// Font Face Declarations
+// ============================================================================
+
+export interface FontFaceDeclaration {
+  family: string;
+  src: string[];
+  weight?: string;
+  style?: string;
+  display?: string;
+  formats: string[];
+}
+
+// ============================================================================
+// UI Pattern Detection
+// ============================================================================
+
+export type UIPatternType =
+  | 'button'
+  | 'input'
+  | 'textarea'
+  | 'select'
+  | 'dialog'
+  | 'table'
+  | 'form'
+  | 'navbar'
+  | 'tabs'
+  | 'accordion'
+  | 'card'
+  | 'dropdown'
+  | 'checkbox'
+  | 'radio'
+  | 'pagination'
+  | 'breadcrumb'
+  | 'tooltip'
+  | 'badge';
+
+export interface DetectedUIPattern {
+  type: UIPatternType;
+  selector: string;
+  count: number;
+  shadcnComponent: string;
+  htmlSnippet: string;
+}
+
+// ============================================================================
+// Redirect & Locale
+// ============================================================================
+
+export interface RedirectEntry {
+  from: string;
+  to: string;
+  statusCode: number;
+}
+
+export interface LocaleConfig {
+  detected: boolean;
+  defaultLocale?: string;
+  locales: string[];
+  pattern?: 'prefix' | 'subdomain' | 'query';
 }
 
 // ============================================================================
@@ -226,6 +291,18 @@ export interface PageIR {
 
   /** Cumulative Layout Shift data observed during page load */
   cls?: CLSData;
+
+  /** @font-face declarations extracted from stylesheets */
+  fonts?: FontFaceDeclaration[];
+
+  /** Detected UI patterns mapped to shadcn components */
+  uiPatterns?: DetectedUIPattern[];
+
+  /** HTTP redirects observed during navigation */
+  redirects?: RedirectEntry[];
+
+  /** Internal links found on the page */
+  internalLinks?: string[];
 }
 
 // ============================================================================
@@ -376,6 +453,7 @@ export interface DiscoveredRoute {
   path: string;
   source: 'sitemap' | 'crawl' | 'config';
   priority?: number;
+  locale?: string;
 }
 
 // ============================================================================

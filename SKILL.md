@@ -12,9 +12,9 @@ This skill migrates legacy websites to modern Next.js. You MUST follow every ste
 
 ---
 
-## PHASE 1: DEPENDENCY INSTALLATION & VERIFICATION
+## PHASE 1: SETUP
 
-**DO NOT PROCEED TO PHASE 2 UNTIL ALL VERIFICATIONS PASS.**
+Install all dependencies, ask the user questions, create the Next.js project, and configure MCP. Do not proceed to Phase 2 until everything is verified.
 
 ### 1.1 Install Skills
 
@@ -22,23 +22,10 @@ Run each command and verify it succeeds:
 
 ```bash
 npx skills add https://github.com/vercel-labs/agent-skills --skill vercel-react-best-practices --yes
-```
-**VERIFY**: Command outputs success message.
-
-```bash
 npx skills add https://github.com/vercel-labs/next-skills --skill next-best-practices --yes
-```
-**VERIFY**: Command outputs success message.
-
-```bash
 npx skills add https://github.com/vercel-labs/next-skills --skill next-cache-components --yes
-```
-**VERIFY**: Command outputs success message.
-
-```bash
 npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-guidelines --yes
 ```
-**VERIFY**: Command outputs success message.
 
 ### 1.2 Install Migent
 
@@ -46,27 +33,9 @@ npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-gu
 npm install -g migent
 ```
 
-**VERIFY**: Run `migent --version` and confirm version number is returned.
+**VERIFY**: `migent --version` returns a version number.
 
-### 1.3 Verification Checkpoint
-
-Before proceeding, confirm ALL of the following:
-
-- [ ] `vercel-react-best-practices` skill installed
-- [ ] `next-best-practices` skill installed
-- [ ] `next-cache-components` skill installed
-- [ ] `web-design-guidelines` skill installed
-- [ ] `migent --version` returns a version number
-
-**IF ANY VERIFICATION FAILS**: Stop and report the error to the user. Do not continue.
-
----
-
-## PHASE 2: USER QUESTIONS & VALIDATION
-
-### 2.1 Ask Questions
-
-Ask the user these questions:
+### 1.3 Ask User Questions
 
 1. **"Which directory contains your legacy site?"**
    - Scan workspace for `package.json`, `composer.json`, `Gemfile`, `index.html`, `index.php`
@@ -78,45 +47,32 @@ Ask the user these questions:
 3. **"What should I name the Next.js project?"**
    - Suggest: `<legacy-name>-next`
 
-**IMPORTANT**: Always the latest Next.js (check for version). Any styles (included design systems) need to be latest tailwindcss and include shadcn (check versions).
-
-### 2.2 Validate Answers
-
-**BEFORE PROCEEDING**, verify:
+### 1.4 Validate Legacy Site
 
 ```bash
-# Verify legacy directory exists
 ls -la <legacy-directory>
-```
-**MUST PASS**: Directory exists and contains files.
-
-```bash
-# Verify legacy site is accessible
 curl -s -o /dev/null -w "%{http_code}" http://localhost:<port>/
 ```
-**MUST RETURN**: `200`
+
+**MUST PASS**: Directory exists AND curl returns `200`.
+
+**CAPTURE** any observed request patterns. Example: Redirect to /en means the site has localisation — include it in the migration plan.
 
 **IF VALIDATION FAILS**: Return to user with specific error. Do not guess or proceed.
 
-**CAPTURE**: any observed request patterns. Example: Redirect to /en; this would mean the site has implemented localisation and we would need to include localisation in the migration plan.
+### 1.5 Load All Skills
 
----
-
-## PHASE 3: PROJECT SETUP
-
-**INVOKE `/next-best-practices` SKILL BEFORE STARTING THIS PHASE.**
-
-### 3.1 Load Best Practices
+Load all skill contexts now. They will be used throughout the migration.
 
 ```
 /next-best-practices
+/vercel-react-best-practices
+/web-design-guidelines
 ```
 
-**VERIFY**: Skill context is loaded. Read and understand the guidelines.
+**IMPORTANT**: Always use the latest Next.js (check version). Styles need latest tailwindcss and include shadcn (check versions).
 
-### 3.2 Create Next.js Project
-
-Use the latest Next.js with modern tooling:
+### 1.6 Create Next.js Project
 
 ```bash
 bunx create-next-app@latest <project-name> \
@@ -132,9 +88,9 @@ bunx create-next-app@latest <project-name> \
 **NOTE**:
 - Use `bun`, not `npm`
 - Use `bunx`, not `npx`
-- ESLint is NOT included - we use Biome
+- ESLint is NOT included — we use Biome
 
-### 3.3 Install Biome
+### 1.7 Install Biome
 
 ```bash
 cd <project-name>
@@ -158,16 +114,36 @@ Create `biome.json`:
 }
 ```
 
-### 3.4 Install Framer Motion (if animations detected)
+### 1.8 Install shadcn/ui
 
-If Phase 3 found jQuery animations or CSS animations:
+**REQUIRED for all migrations.** shadcn provides accessible, production-ready components.
+
 ```bash
-bun add framer-motion
+cd <project-name>
+bunx shadcn@latest init -y
 ```
 
-### 3.5 Configure MCP
+Install base components that most sites need:
+```bash
+bunx shadcn@latest add button input textarea select card -y
+```
 
-Create `.mcp.json` in the **workspace root** (the directory you opened in your editor / where Claude Code runs), **NOT** inside the Next.js project directory:
+After running `ir_capture` in Phase 2, install additional components based on detected UI patterns:
+```bash
+# Example: if ir_capture shows uiPatterns with Dialog, Table, NavigationMenu
+bunx shadcn@latest add dialog table navigation-menu -y
+```
+
+**VERIFY**:
+```bash
+ls components.json
+ls src/components/ui/
+```
+**MUST PASS**: `components.json` exists and `src/components/ui/` contains component files.
+
+### 1.9 Configure MCP
+
+Create `.mcp.json` in the **workspace root** (NOT inside the Next.js project):
 
 ```
 workspace/              ← .mcp.json goes HERE
@@ -182,74 +158,68 @@ workspace/              ← .mcp.json goes HERE
     "migent": {
       "command": "npx",
       "args": ["-y", "migent", "mcp"]
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
     }
   }
 }
 ```
 
-**IMPORTANT**: If `.mcp.json` is placed inside the Next.js project directory, Claude Code will not detect it. It must be at the workspace root.
+The **shadcn MCP** lets you browse, search, and install components via natural language. Use it to install components detected by `ir_capture` uiPatterns and to find blocks/templates that match legacy page structures.
 
-### 3.6 Test MCP Configuration
+### 1.10 Verify MCP
 
-Start the Next.js dev server:
+Start the Next.js dev server, then test MCP:
+
 ```bash
 bun run dev
 ```
 
-Then test MCP works with Next.js:
 ```
 ir_capture(port: 3000, route: "/")
 ```
 
-**VERIFY**: Returns captured IR for the default Next.js page.
+**VERIFY**: Returns JSON with `elementCount > 0`.
+
+### 1.11 Copy Assets
+
+```bash
+mkdir -p <next-project>/public
+cp -r <legacy-directory>/images/* <next-project>/public/images/ 2>/dev/null || true
+cp -r <legacy-directory>/fonts/* <next-project>/public/fonts/ 2>/dev/null || true
+cp -r <legacy-directory>/assets/* <next-project>/public/assets/ 2>/dev/null || true
+```
+
+### Setup Checkpoint
+
+Before proceeding, confirm ALL of the following:
+- [ ] All 4 skills installed
+- [ ] Legacy site running and accessible
+- [ ] Next.js project created with Biome configured
+- [ ] shadcn/ui initialized with base components
+- [ ] MCP returning captures for both sites
+- [ ] Assets copied
+
+**IF ANY FAILS**: Stop and report the error to the user.
 
 ---
 
-## PHASE 4: SERVER MANAGEMENT
+## PHASE 2: DISCOVERY
 
-### 4.1 Verify Both Sites Running
+Use MCP tools to capture the legacy site and analyze patterns. **DO NOT USE CURL. DO NOT FETCH HTML MANUALLY.**
 
-Legacy site:
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:<legacy-port>/
-```
-**MUST RETURN**: `200`
-
-Next.js site:
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/
-```
-**MUST RETURN**: `200`
-
-**IF EITHER FAILS**: Do not proceed. Fix server issues first.
-
----
-
-## PHASE 5: DISCOVERY (USING MIGENT)
-
-**YOU MUST USE MIGENT MCP TOOLS. DO NOT USE CURL. DO NOT FETCH HTML MANUALLY.**
-
-### 5.1 Test MCP Connection
-
-Call the MCP tool:
-```
-ir_capture(port: <legacy-port>, route: "/")
-```
-
-**VERIFY**: Returns JSON with `success: true`, `elementCount > 0`, `layoutPatterns`.
-
-**IF THIS FAILS**: The MCP server is not running. Stop and report to user.
-
-### 5.2 Discover Routes
+### 2.1 Discover Routes
 
 Analyze legacy codebase to find all routes:
 - Check `sitemap.xml` if exists
 - Check router files (Express routes, Next.js pages, PHP files)
 - Check navigation links in captured IR
 
-### 5.3 Capture All Routes
+### 2.2 Capture All Routes
 
-For EACH discovered route, call:
+For EACH discovered route:
 ```
 ir_capture(port: <legacy-port>, route: "<route>")
 ```
@@ -264,115 +234,250 @@ Save results to `migration.json`:
     "routes": ["/", "/about", "/contact"]
   },
   "captures": {
-    "/": { "ir": <captured-ir>, "elementCount": 150 },
-    "/about": { "ir": <captured-ir>, "elementCount": 89 }
+    "/": { "elementCount": 150, "animationCount": 12 },
+    "/about": { "elementCount": 89, "animationCount": 3 }
   },
   "next": {
     "directory": "./my-next-app",
     "port": 3000
   },
-  "progress": {}
+  "progress": {},
+  "skippedIssues": []
 }
 ```
 
-### 5.4 Analyze JavaScript Patterns
-
-**INVOKE `/vercel-react-best-practices` SKILL BEFORE STARTING THIS PHASE**.
+### 2.3 Analyze JavaScript Patterns
 
 **IMPORTANT**: Legacy JavaScript is ANYTHING that is NOT React or Next.js.
-
-**EXAMPLES**: Sub-set of patterns to review.
 
 Search legacy codebase for patterns that need conversion:
 
 ```bash
 # Find jQuery
 grep -r "jquery\|jQuery\|\\\$(" <legacy-directory> --include="*.js" --include="*.html" --include="*.php"
-```
 
-```bash
 # Find inline handlers
 grep -r "onclick=\|onsubmit=\|onchange=" <legacy-directory> --include="*.html" --include="*.php"
 ```
 
 Document findings in `migration.json` under `legacy.javascript`.
 
-### 5.5 Copy Assets
+### 2.4 Detect Locales & Validate Links
 
+Check `ir_capture` results for locale patterns:
+
+1. **Redirect-based detection**: If `ir_capture` returns `redirects` (e.g., `/` → `/en/`), the site uses locale prefixes.
+2. **Route-based detection**: If discovered routes have locale prefixes (e.g., `/en/about`, `/fr/about`), locales are in use. `ir_start` will confirm via `localeConfig` in Phase 3.
+
+**If locales are detected:**
+- Set up Next.js i18n middleware for locale routing
+- Create `src/middleware.ts` with locale detection and redirect logic
+- Use `next-intl` or Next.js built-in i18n for locale-aware Link components
+- Validate all internal links include the correct locale prefix
+- Map each locale route to its Next.js equivalent
+
+**Internal link validation**: Check `ir_capture` `internalLinks` against detected locales. Links missing locale prefixes will break in the migrated site.
+
+### 2.5 Install Additional shadcn Components
+
+Based on `ir_capture` `uiPatterns` data, install any remaining shadcn components. Use the **shadcn MCP** to browse and install:
+
+```
+"Install the dialog, table, and tabs components from shadcn"
+```
+
+Or via CLI:
 ```bash
-mkdir -p <next-project>/public
-cp -r <legacy-directory>/images/* <next-project>/public/images/ 2>/dev/null || true
-cp -r <legacy-directory>/fonts/* <next-project>/public/fonts/ 2>/dev/null || true
-cp -r <legacy-directory>/assets/* <next-project>/public/assets/ 2>/dev/null || true
+bunx shadcn@latest add dialog table tabs accordion -y
+```
+
+Also search for **blocks** that match legacy page patterns (e.g., login forms, dashboards, pricing pages). Blocks provide pre-built layouts that accelerate migration.
+
+**VERIFY**: All components listed in `uiPatterns.shadcnComponentsNeeded` are installed.
+
+### 2.6 Install Conditional Dependencies
+
+Based on discovery results:
+
+If animations were detected in any `ir_capture`:
+```bash
+cd <next-project>
+bun add framer-motion
 ```
 
 ---
 
-## PHASE 6: MIGRATION
+## PHASE 3: MIGRATE (PER ROUTE)
 
-### CRITICAL RULES - VIOLATIONS ARE FAILURES
+For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4.
 
-**FORBIDDEN - NEVER USE THESE:**
-- `dangerouslySetInnerHTML` - NEVER use to copy legacy HTML
-- `onclick="..."` or any inline event handlers in output
+### CRITICAL RULES — VIOLATIONS ARE FAILURES
+
+**FORBIDDEN:**
+- `dangerouslySetInnerHTML` — NEVER use to copy legacy HTML
+- `onclick="..."` or any inline event handlers
 - Legacy CSS class names (must convert to Tailwind)
 - jQuery or any jQuery patterns
 - `<script>` tags with inline JavaScript
 - `class=` instead of `className=`
+- Raw `<button>`, `<input>`, `<textarea>`, `<select>`, `<table>`, `<dialog>` outside `components/ui/` — use shadcn
+- `@font-face` in CSS — use `next/font` (see Appendix C)
 
-**REQUIRED - ALWAYS USE THESE:**
+**REQUIRED:**
 - Proper JSX with `className`
 - React event handlers (`onClick={handler}`)
-- Tailwind CSS utilities (convert from captured styles)
+- Tailwind CSS utilities (convert from captured styles — see Appendix A)
+- shadcn/ui components for all form elements, dialogs, tables (see Appendix D)
 - `next/image` for images
 - `next/font` for fonts
 - Server Components by default
 - `'use client'` only when needed
 
-### 6.1 For Each Route
+### 3.1 Build Page
 
-#### Step 1: Load Skills
+Read captured IR from `migration.json` for this route.
 
-```
-/vercel-react-best-practices
-/next-best-practices
-/web-design-guidelines
-```
-
-**You MUST invoke these skills. They contain critical patterns.**
-
-#### Step 2: Read Captured IR
-
-Read from `migration.json` the captured IR for this route.
-
-Use `ir_element(site: "legacy", selector: "...")` to inspect specific elements.
-
-#### Step 3: Create Page
+Use `ir_inspect(selector: "...", site: "legacy")` to inspect specific elements.
 
 Based on captured IR:
 1. Create `app/<route>/page.tsx`
 2. Convert layout structure to JSX
-3. **Convert captured computed styles to Tailwind** (see mapping below)
-4. Convert event handlers to React patterns using /vercel-react-best-practices skill
+3. Convert captured computed styles to Tailwind (see Appendix A)
+4. Convert event handlers to React patterns
 5. Create components for reusable parts (header, footer)
-6. **Recreate animations** using captured animation data
+6. Recreate animations using captured animation data (see Appendix B)
 
-**Example conversion:**
-```tsx
-// WRONG - copying HTML
-<div dangerouslySetInnerHTML={{ __html: legacyHtml }} />
+### 3.2 Code Quality Gate
 
-// CORRECT - proper React with Tailwind from captured styles
-<div className="flex items-center gap-4 bg-[#c41e3a] px-5 py-4">
-  <button onClick={handleClick} className="rounded bg-white px-4 py-2">
-    Click me
-  </button>
-</div>
+**BEFORE visual validation**, verify no anti-patterns:
+
+```bash
+# Anti-patterns (ALL MUST RETURN no results)
+grep -r "dangerouslySetInnerHTML" <next-project>/src/
+grep -r 'onclick="' <next-project>/src/
+grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
+grep -r 'style={{' <next-project>/src/ --include="*.tsx" --include="*.jsx"
+grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
+grep -r "from ['\"]jquery['\"]" <next-project>/src/
+
+# Font enforcement — must use next/font, not raw @font-face
+grep -r "@font-face" <next-project>/src/
+
+# shadcn enforcement — raw HTML elements FORBIDDEN outside components/ui/
+grep -rn '<button' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<input' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<textarea' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<select' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<table' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<dialog' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
 ```
 
-#### Captured Styles → Tailwind Mapping
+**ALL MUST RETURN**: No results. Use shadcn components (`<Button>`, `<Input>`, `<Table>`, etc.) instead of raw HTML — see Appendix D.
 
-Use `ir_element(site: "legacy", selector: "...")` to get computed styles, then convert:
+```bash
+# Verify shadcn IS being used (SHOULD return matches)
+grep -rn "from ['\"]@/components/ui/" <next-project>/src/ --include="*.tsx"
+```
+
+Fix any violations before proceeding.
+
+### 3.3 Visual Validation Loop
+
+Start watch mode:
+```
+ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
+```
+
+Loop until match >= 95%:
+```
+result = ir_next()
+
+IF result.clsBlocked:
+  - CLS score is above 0.1 — ir_next REFUSES to serve other issues
+  - Read result.cls.topShifters to identify which elements shifted
+  - Fix using result.suggestedFixes:
+    1. Font shift → next/font with display: "swap", adjustFontFallback: true
+    2. Image shift → next/image with explicit width + height
+    3. Dynamic content → min-height or skeleton placeholders
+    4. Embeds → fixed aspect-ratio container
+  - Save file → watch recaptures → call ir_next again
+  - Repeat until clsBlocked is gone
+
+IF result.regressionBlocked:
+  - New issues were introduced — fix the regression first
+  - Save file → watch recaptures → call ir_next again
+
+IF result.issue exists:
+  - Read issue details (selector, styles, position)
+  - Fix the specific issue using Tailwind
+  - Save file → wait for rebuild → call ir_next again
+  - After 3 failed attempts on the same issue: ir_next(skip: true)
+  - Document skipped issue in migration.json under skippedIssues
+
+IF result.complete or match >= 95%:
+  - Proceed to 3.4
+```
+
+**CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
+
+### 3.4 Verify and Mark Complete
+
+```
+ir_status()
+```
+
+Confirm:
+- `match >= 95%`
+- `clsBlocked: false`
+- `clsRating: "good"`
+
+Mark route complete in `migration.json`. Move to next route.
+
+If only skipped issues remain and match is below 95%: mark route for human review and continue.
+
+---
+
+## PHASE 4: COMPLETION
+
+### 4.1 Generate Report
+
+Create `MIGRATION_REPORT.md` with:
+- Summary (routes migrated, match percentages)
+- Per-route breakdown
+- Skipped issues requiring human review
+- Components created
+- Recommendations
+
+### 4.2 Cleanup
+
+```
+ir_stop()
+```
+
+---
+
+## ERROR HANDLING
+
+### MCP tool fails
+Stop and report to user. Do not attempt workarounds.
+
+### Site unreachable
+Stop and ask user to restart the server.
+
+---
+
+## RESUMABILITY
+
+If `migration.json` exists when `/migration` is invoked:
+1. Read existing state
+2. Skip completed routes
+3. Resume from last in-progress route
+
+---
+
+## APPENDIX A: Captured Styles → Tailwind Mapping
+
+Use `ir_inspect(selector: "...", site: "legacy")` to get computed styles, then convert:
 
 **Colors** (backgroundColor, color, borderColor):
 ```
@@ -436,6 +541,50 @@ borderWidth: "1px" → border
 borderColor: "rgb(229,231,235)" → border-gray-200
 ```
 
+**Font Style**:
+```
+fontStyle: "italic" → italic
+fontStyle: "normal" → not-italic
+```
+
+**Text Transform**:
+```
+textTransform: "uppercase" → uppercase
+textTransform: "lowercase" → lowercase
+textTransform: "capitalize" → capitalize
+textTransform: "none" → normal-case
+```
+
+**Text Decoration**:
+```
+textDecoration: "underline" → underline
+textDecoration: "line-through" → line-through
+textDecoration: "none" → no-underline
+```
+
+**Overflow**:
+```
+overflow: "hidden" → overflow-hidden
+overflow: "auto" → overflow-auto
+overflow: "scroll" → overflow-scroll
+overflowX: "auto" → overflow-x-auto
+overflowY: "hidden" → overflow-y-hidden
+```
+
+**Grid**:
+```
+gridTemplateColumns: "repeat(3, 1fr)" → grid-cols-3
+gridTemplateColumns: "repeat(4, minmax(0, 1fr))" → grid-cols-4
+gridTemplateColumns: "200px 1fr" → grid-cols-[200px_1fr]
+```
+
+**Transform**:
+```
+transform: "translateX(-50%)" → -translate-x-1/2
+transform: "rotate(45deg)" → rotate-45
+transform: "scale(1.1)" → scale-110
+```
+
 **Effects**:
 ```
 opacity: "0.5" → opacity-50
@@ -451,9 +600,11 @@ fontSize: "17px" → text-[17px]
 maxWidth: "1140px" → max-w-[1140px]
 ```
 
-#### Recreating Animations
+---
 
-From captured `animations` data:
+## APPENDIX B: Recreating Animations
+
+From captured `animations` data in `ir_capture`:
 
 **CSS @keyframes → Framer Motion:**
 ```tsx
@@ -470,7 +621,7 @@ import { motion } from 'framer-motion';
 
 **CSS @keyframes → Tailwind animation:**
 ```css
-/* Add to globals.css - copy the captured keyframes rule */
+/* Add to globals.css — copy the captured keyframes rule */
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
@@ -505,219 +656,184 @@ import { AnimatePresence, motion } from 'framer-motion';
 </AnimatePresence>
 ```
 
-#### Step 4: Code Quality Gate
+---
 
-**BEFORE visual validation**, verify no anti-patterns:
+## APPENDIX C: Font Migration
 
-```bash
-# No dangerouslySetInnerHTML
-grep -r "dangerouslySetInnerHTML" <next-project>/src/
-```
-**MUST RETURN**: No results
+Read font data from `ir_capture` response (`fonts` section). For each detected font family:
 
-```bash
-# No inline event handlers
-grep -r 'onclick="' <next-project>/src/
-```
-**MUST RETURN**: No results
+**Google Fonts → `next/font/google`:**
+```tsx
+import { Inter, Roboto } from 'next/font/google';
 
-```bash
-# No class= (must be className)
-grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
-```
-**MUST RETURN**: No results
-
-```bash
-# No inline styles (use Tailwind instead)
-grep -r 'style={{' <next-project>/src/ --include="*.tsx" --include="*.jsx"
-```
-**MUST RETURN**: No results (or only for truly dynamic values like width from state)
-
-```bash
-# No legacy CSS class names (should be Tailwind utilities)
-grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
-```
-**MUST RETURN**: No results (catches patterns like `cont_card`, `fill__red`)
-
-```bash
-# No jQuery imports
-grep -r "from ['\"]jquery['\"]" <next-project>/src/
-grep -r "require.*jquery" <next-project>/src/
-```
-**MUST RETURN**: No results
-
-**IF ANY CHECK FAILS**: Fix before proceeding.
-
-#### Step 5: Visual Validation (CLS gate is enforced automatically)
-
-Start watch mode:
-```
-ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '700'],  // from fonts[].weight
+  style: ['normal', 'italic'],  // from fonts[].style
+  display: 'swap',  // from fonts[].display or default to 'swap'
+  variable: '--font-inter',
+});
 ```
 
-Loop until match >= 95%:
-```
-result = ir_next()
+**Custom Fonts → `next/font/local`:**
+```tsx
+import localFont from 'next/font/local';
 
-IF result.clsBlocked:
-  - CLS score is above 0.1 — ir_next REFUSES to serve other issues
-  - Read result.cls.topShifters to identify which elements shifted
-  - Fix using result.suggestedFixes:
-    1. Font shift → next/font with display: "swap", adjustFontFallback: true
-    2. Image shift → next/image with explicit width + height
-    3. Dynamic content → min-height or skeleton placeholders
-    4. Embeds → fixed aspect-ratio container
-  - Save file → watch recaptures → call ir_next again
-  - Repeat until clsBlocked is gone
-
-IF result.issue exists:
-  - Read issue details (selector, styles, position)
-  - Fix the specific issue using Tailwind
-  - Save file
-  - Wait for rebuild
-  - Continue loop
-
-IF match >= 95%:
-  - Mark route complete in migration.json
-  - Move to next route
+const customFont = localFont({
+  src: [
+    { path: './fonts/custom-regular.woff2', weight: '400', style: 'normal' },
+    { path: './fonts/custom-bold.woff2', weight: '700', style: 'normal' },
+  ],
+  variable: '--font-custom',
+  display: 'swap',
+});
 ```
 
-**CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
-
-#### Step 6: Final Verification
-
+**Apply in `layout.tsx`:**
+```tsx
+export default function RootLayout({ children }) {
+  return (
+    <html lang="en" className={`${inter.variable} ${customFont.variable}`}>
+      <body>{children}</body>
+    </html>
+  );
+}
 ```
-ir_status()
+
+**Configure in `tailwind.config.ts`:**
+```ts
+fontFamily: {
+  sans: ['var(--font-inter)', ...defaultTheme.fontFamily.sans],
+  custom: ['var(--font-custom)'],
+},
 ```
 
-Confirm ALL of:
-- `match >= 95%`
-- `clsBlocked: false`
-- `clsRating: "good"`
-
-before marking route complete.
+**Download font files**: If `ir_capture` `fonts[].src` contains URLs, download .woff2 files to `public/fonts/` for `next/font/local`.
 
 ---
 
-## PHASE 7: COMPLETION
+## APPENDIX D: shadcn Component Mapping
 
-### 7.1 Generate Report
+**MANDATORY**: Use shadcn components instead of raw HTML. Map legacy elements:
 
-Create `MIGRATION_REPORT.md` with:
-- Summary (routes migrated, match percentages)
-- Per-route breakdown
-- Any routes needing human review
-- Components created
-- Recommendations
+| Legacy HTML | shadcn Component | Import |
+|---|---|---|
+| `<button>`, `<input type="submit">` | `<Button>` | `@/components/ui/button` |
+| `<input type="text\|email\|password">` | `<Input>` | `@/components/ui/input` |
+| `<textarea>` | `<Textarea>` | `@/components/ui/textarea` |
+| `<select>` | `<Select>` | `@/components/ui/select` |
+| `<table>` | `<Table>` | `@/components/ui/table` |
+| `<dialog>`, `.modal` | `<Dialog>` | `@/components/ui/dialog` |
+| `<nav>` | `<NavigationMenu>` | `@/components/ui/navigation-menu` |
+| `.card`, `<article>` | `<Card>` | `@/components/ui/card` |
+| `<input type="checkbox">` | `<Checkbox>` | `@/components/ui/checkbox` |
+| `<input type="radio">` | `<RadioGroup>` | `@/components/ui/radio-group` |
+| `.tabs`, `[role="tablist"]` | `<Tabs>` | `@/components/ui/tabs` |
+| `.accordion`, `<details>` | `<Accordion>` | `@/components/ui/accordion` |
+| `.breadcrumb` | `<Breadcrumb>` | `@/components/ui/breadcrumb` |
+| `.pagination` | `<Pagination>` | `@/components/ui/pagination` |
 
-### 7.2 Cleanup
+**Example conversion:**
+```tsx
+// WRONG - raw HTML
+<button className="bg-red-600 text-white px-4 py-2 rounded">Submit</button>
 
+// CORRECT - shadcn Button
+import { Button } from "@/components/ui/button";
+<Button className="bg-red-600 text-white">Submit</Button>
 ```
-ir_stop()
+
+```tsx
+// WRONG - raw HTML table
+<table><tr><td>Name</td></tr></table>
+
+// CORRECT - shadcn Table
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+<Table>
+  <TableBody>
+    <TableRow>
+      <TableCell>Name</TableCell>
+    </TableRow>
+  </TableBody>
+</Table>
 ```
+
+**Raw HTML elements (`<button>`, `<input>`, `<table>`, `<dialog>`) are FORBIDDEN outside `src/components/ui/`.**
+
+**Additional code quality checks for shadcn/fonts:**
+```bash
+# No raw @font-face in CSS (must use next/font)
+grep -r "@font-face" <next-project>/src/
+
+# No raw <button> outside components/ui/ (must use shadcn Button)
+grep -rn '<button' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+
+# No raw <input> outside components/ui/ (must use shadcn Input)
+grep -rn '<input' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+
+# No raw <table> outside components/ui/ (must use shadcn Table)
+grep -rn '<table' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+
+# Verify shadcn components ARE being used
+grep -rn "from ['\"]@/components/ui/" <next-project>/src/ --include="*.tsx"
+```
+**ALL MUST RETURN**: No results (except shadcn verification which SHOULD return matches).
 
 ---
 
-## MCP TOOLS REFERENCE
+## APPENDIX E: MCP Tools Reference
 
 ### ir_capture
-DETERMINISTIC capture of a page with full JavaScript execution.
+Capture a page's DOM tree, computed styles, animation metadata, and CLS score.
 
-**What it does:**
+```
+ir_capture(port: number, route?: string, width?: number, height?: number)
+```
+
+Deterministic capture sequence:
 1. Waits for network idle
 2. Forces all lazy images to load
-3. Waits for all images to complete
-4. Waits for fonts to load
-5. Extracts animation metadata (BEFORE finishing animations)
-6. Forces all animations to END STATE
-7. Waits for DOM stability
-
-```
-ir_capture(port: number, route?: string, viewport?: {width, height})
-```
+3. Waits for all images and fonts
+4. Extracts animation metadata (BEFORE finishing animations)
+5. Forces all animations to END STATE
+6. Waits for DOM stability
 
 **Returns:**
 - Layout patterns (header, nav, footer, sidebar, main)
 - Component hierarchy
 - Top-level elements with computed styles
-- **Animation data:**
-  - `keyframes`: CSS @keyframes definitions (name + rules)
-  - `animatedElements`: Elements with animations (selector, name, duration, easing, delay)
-  - `transitionElements`: Elements with transitions (selector, property, duration, easing)
-  - `jQueryAnimations`: Detected jQuery animation patterns
-- **CLS data** (`cls`):
-  - `score`: Total Cumulative Layout Shift score
-  - `rating`: `good` (<=0.1), `needs-improvement` (<=0.25), or `poor` (>0.25)
-  - `shiftCount`: Number of individual layout shifts observed
-  - `topShifters`: Top 5 shifts with element selectors, before/after positions, and deltaY
-
-**Using animation data for migration:**
-```tsx
-// Legacy @keyframes captured:
-// { name: "fadeIn", rules: "@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }" }
-
-// Recreate with Framer Motion:
-<motion.div
-  initial={{ opacity: 0 }}
-  animate={{ opacity: 1 }}
-  transition={{ duration: 0.3 }}  // from animatedElements[].duration
->
-
-// Or recreate with CSS:
-// Copy the @keyframes rule to your globals.css
-// Apply: className="animate-[fadeIn_0.3s_ease-in-out]"
-```
+- **Animation data:** keyframes, animatedElements, transitionElements, jQueryAnimations
+- **CLS data:** score, rating, top shifters
+- **Font data** (`fonts`): totalFontFaces, fontFaces, uniqueFamilies
+- **UI patterns** (`uiPatterns`): patterns with shadcnComponentsNeeded
+- **Redirects** (`redirects`): Array of { from, to, statusCode } — useful for locale detection
+- **Internal links** (`internalLinks`): { total, links[] } — for route validation
 
 ### ir_start
-Start watch mode for visual validation.
+Start migration watch mode. Captures both sites, diffs, watches for file changes.
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
-Returns: Initial diff and first issue.
+Returns: Initial diff, first issue, and `localeConfig` (if locales detected in routes).
 
 ### ir_next
-Get next issue to fix. Blocks during rebuild.
-Returns: Issue with selector, position, styles, suggested fix.
+Get next issue to fix. Blocks on CLS gate and regressions.
+```
+ir_next(skip?: boolean)
+```
+- `skip: true` — skip current issue after failed attempts, advance to next
+- Returns: Issue with selector, position, styles, and fix suggestion.
 
 ### ir_status
-Get current match percentage and issue counts.
+Get migration progress: match percentages, issue counts by severity, CLS score, regression state.
 
-### ir_element
-Deep-dive on specific element.
+### ir_inspect
+Inspect element by selector or text.
 ```
-ir_element(site: "legacy" | "next", selector: string)
+ir_inspect(selector: string, site?: "legacy" | "next" | "both")
 ```
-
-### ir_compare
-Side-by-side element comparison.
-```
-ir_compare(selector: string)
-```
+- `site="legacy"` or `"next"`: full styles, rect, snippet for one side
+- `site="both"` (default): side-by-side comparison with style diffs
 
 ### ir_stop
-Stop watch mode.
-
----
-
-## ERROR HANDLING
-
-### MCP tool fails
-Stop and report to user. Do not attempt workarounds.
-
-### Site unreachable
-Stop and ask user to restart the server.
-
-### Match stuck below 95%
-After 5 attempts on same issue:
-1. Mark route for human review
-2. Document the blocker
-3. Continue with next route
-
----
-
-## RESUMABILITY
-
-If `migration.json` exists when `/migration` is invoked:
-1. Read existing state
-2. Skip completed routes
-3. Resume from last in-progress route
+Stop watch mode and close browser.

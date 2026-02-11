@@ -43,6 +43,7 @@ const MAJOR_STYLES: (keyof ComputedStyles)[] = [
   'marginLeft',
   'fontSize',
   'fontWeight',
+  'fontFamily',
   'color',
   'textAlign',
   'borderRadius',
@@ -50,9 +51,11 @@ const MAJOR_STYLES: (keyof ComputedStyles)[] = [
 
 // Styles that are minor differences
 const MINOR_STYLES: (keyof ComputedStyles)[] = [
-  'fontFamily',
   'lineHeight',
   'letterSpacing',
+  'fontStyle',
+  'textTransform',
+  'textDecoration',
   'opacity',
   'boxShadow',
   'textShadow',
@@ -369,6 +372,12 @@ function generateStyleSuggestion(property: string, legacy: string, next: string)
     marginLeft: (v) => `ml-[${v}]`,
     gap: (v) => `gap-[${v}]`,
     borderRadius: (v) => `rounded-[${v}]`,
+    fontFamily: (v) => `font-[${v.split(',')[0].trim().replace(/['"]/g, '')}]`,
+    fontStyle: (v) => (v === 'italic' ? 'italic' : v === 'normal' ? 'not-italic' : v),
+    textTransform: (v) => (v === 'uppercase' ? 'uppercase' : v === 'lowercase' ? 'lowercase' : v === 'capitalize' ? 'capitalize' : v === 'none' ? 'normal-case' : v),
+    textDecoration: (v) => (v === 'underline' ? 'underline' : v === 'line-through' ? 'line-through' : v === 'none' ? 'no-underline' : v),
+    lineHeight: (v) => `leading-[${v}]`,
+    letterSpacing: (v) => `tracking-[${v}]`,
   };
 
   const mapper = tailwindMap[property];
