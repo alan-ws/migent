@@ -12,9 +12,9 @@ This skill migrates legacy websites to modern Next.js. You MUST follow every ste
 
 ---
 
-## PHASE 1: DEPENDENCY INSTALLATION & VERIFICATION
+## PHASE 1: SETUP
 
-**DO NOT PROCEED TO PHASE 2 UNTIL ALL VERIFICATIONS PASS.**
+Install all dependencies, ask the user questions, create the Next.js project, and configure MCP. Do not proceed to Phase 2 until everything is verified.
 
 ### 1.1 Install Skills
 
@@ -22,23 +22,10 @@ Run each command and verify it succeeds:
 
 ```bash
 npx skills add https://github.com/vercel-labs/agent-skills --skill vercel-react-best-practices --yes
-```
-**VERIFY**: Command outputs success message.
-
-```bash
 npx skills add https://github.com/vercel-labs/next-skills --skill next-best-practices --yes
-```
-**VERIFY**: Command outputs success message.
-
-```bash
 npx skills add https://github.com/vercel-labs/next-skills --skill next-cache-components --yes
-```
-**VERIFY**: Command outputs success message.
-
-```bash
 npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-guidelines --yes
 ```
-**VERIFY**: Command outputs success message.
 
 ### 1.2 Install Migent
 
@@ -46,27 +33,9 @@ npx skills add https://github.com/vercel-labs/agent-skills --skill web-design-gu
 npm install -g migent
 ```
 
-**VERIFY**: Run `migent --version` and confirm version number is returned.
+**VERIFY**: `migent --version` returns a version number.
 
-### 1.3 Verification Checkpoint
-
-Before proceeding, confirm ALL of the following:
-
-- [ ] `vercel-react-best-practices` skill installed
-- [ ] `next-best-practices` skill installed
-- [ ] `next-cache-components` skill installed
-- [ ] `web-design-guidelines` skill installed
-- [ ] `migent --version` returns a version number
-
-**IF ANY VERIFICATION FAILS**: Stop and report the error to the user. Do not continue.
-
----
-
-## PHASE 2: USER QUESTIONS & VALIDATION
-
-### 2.1 Ask Questions
-
-Ask the user these questions:
+### 1.3 Ask User Questions
 
 1. **"Which directory contains your legacy site?"**
    - Scan workspace for `package.json`, `composer.json`, `Gemfile`, `index.html`, `index.php`
@@ -78,45 +47,32 @@ Ask the user these questions:
 3. **"What should I name the Next.js project?"**
    - Suggest: `<legacy-name>-next`
 
-**IMPORTANT**: Always the latest Next.js (check for version). Any styles (included design systems) need to be latest tailwindcss and include shadcn (check versions).
-
-### 2.2 Validate Answers
-
-**BEFORE PROCEEDING**, verify:
+### 1.4 Validate Legacy Site
 
 ```bash
-# Verify legacy directory exists
 ls -la <legacy-directory>
-```
-**MUST PASS**: Directory exists and contains files.
-
-```bash
-# Verify legacy site is accessible
 curl -s -o /dev/null -w "%{http_code}" http://localhost:<port>/
 ```
-**MUST RETURN**: `200`
+
+**MUST PASS**: Directory exists AND curl returns `200`.
+
+**CAPTURE** any observed request patterns. Example: Redirect to /en means the site has localisation — include it in the migration plan.
 
 **IF VALIDATION FAILS**: Return to user with specific error. Do not guess or proceed.
 
-**CAPTURE**: any observed request patterns. Example: Redirect to /en; this would mean the site has implemented localisation and we would need to include localisation in the migration plan.
+### 1.5 Load All Skills
 
----
-
-## PHASE 3: PROJECT SETUP
-
-**INVOKE `/next-best-practices` SKILL BEFORE STARTING THIS PHASE.**
-
-### 3.1 Load Best Practices
+Load all skill contexts now. They will be used throughout the migration.
 
 ```
 /next-best-practices
+/vercel-react-best-practices
+/web-design-guidelines
 ```
 
-**VERIFY**: Skill context is loaded. Read and understand the guidelines.
+**IMPORTANT**: Always use the latest Next.js (check version). Styles need latest tailwindcss and include shadcn (check versions).
 
-### 3.2 Create Next.js Project
-
-Use the latest Next.js with modern tooling:
+### 1.6 Create Next.js Project
 
 ```bash
 bunx create-next-app@latest <project-name> \
@@ -132,9 +88,9 @@ bunx create-next-app@latest <project-name> \
 **NOTE**:
 - Use `bun`, not `npm`
 - Use `bunx`, not `npx`
-- ESLint is NOT included - we use Biome
+- ESLint is NOT included — we use Biome
 
-### 3.3 Install Biome
+### 1.7 Install Biome
 
 ```bash
 cd <project-name>
@@ -158,16 +114,9 @@ Create `biome.json`:
 }
 ```
 
-### 3.4 Install Framer Motion (if animations detected)
+### 1.8 Configure MCP
 
-If Phase 3 found jQuery animations or CSS animations:
-```bash
-bun add framer-motion
-```
-
-### 3.5 Configure MCP
-
-Create `.mcp.json` in the **workspace root** (the directory you opened in your editor / where Claude Code runs), **NOT** inside the Next.js project directory:
+Create `.mcp.json` in the **workspace root** (NOT inside the Next.js project):
 
 ```
 workspace/              ← .mcp.json goes HERE
@@ -187,69 +136,56 @@ workspace/              ← .mcp.json goes HERE
 }
 ```
 
-**IMPORTANT**: If `.mcp.json` is placed inside the Next.js project directory, Claude Code will not detect it. It must be at the workspace root.
+### 1.9 Verify MCP
 
-### 3.6 Test MCP Configuration
+Start the Next.js dev server, then test MCP:
 
-Start the Next.js dev server:
 ```bash
 bun run dev
 ```
 
-Then test MCP works with Next.js:
 ```
 ir_capture(port: 3000, route: "/")
 ```
 
-**VERIFY**: Returns captured IR for the default Next.js page.
+**VERIFY**: Returns JSON with `elementCount > 0`.
+
+### 1.10 Copy Assets
+
+```bash
+mkdir -p <next-project>/public
+cp -r <legacy-directory>/images/* <next-project>/public/images/ 2>/dev/null || true
+cp -r <legacy-directory>/fonts/* <next-project>/public/fonts/ 2>/dev/null || true
+cp -r <legacy-directory>/assets/* <next-project>/public/assets/ 2>/dev/null || true
+```
+
+### Setup Checkpoint
+
+Before proceeding, confirm ALL of the following:
+- [ ] All 4 skills installed
+- [ ] Legacy site running and accessible
+- [ ] Next.js project created with Biome configured
+- [ ] MCP returning captures for both sites
+- [ ] Assets copied
+
+**IF ANY FAILS**: Stop and report the error to the user.
 
 ---
 
-## PHASE 4: SERVER MANAGEMENT
+## PHASE 2: DISCOVERY
 
-### 4.1 Verify Both Sites Running
+Use MCP tools to capture the legacy site and analyze patterns. **DO NOT USE CURL. DO NOT FETCH HTML MANUALLY.**
 
-Legacy site:
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:<legacy-port>/
-```
-**MUST RETURN**: `200`
-
-Next.js site:
-```bash
-curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/
-```
-**MUST RETURN**: `200`
-
-**IF EITHER FAILS**: Do not proceed. Fix server issues first.
-
----
-
-## PHASE 5: DISCOVERY (USING MIGENT)
-
-**YOU MUST USE MIGENT MCP TOOLS. DO NOT USE CURL. DO NOT FETCH HTML MANUALLY.**
-
-### 5.1 Test MCP Connection
-
-Call the MCP tool:
-```
-ir_capture(port: <legacy-port>, route: "/")
-```
-
-**VERIFY**: Returns JSON with `success: true`, `elementCount > 0`, `layoutPatterns`.
-
-**IF THIS FAILS**: The MCP server is not running. Stop and report to user.
-
-### 5.2 Discover Routes
+### 2.1 Discover Routes
 
 Analyze legacy codebase to find all routes:
 - Check `sitemap.xml` if exists
 - Check router files (Express routes, Next.js pages, PHP files)
 - Check navigation links in captured IR
 
-### 5.3 Capture All Routes
+### 2.2 Capture All Routes
 
-For EACH discovered route, call:
+For EACH discovered route:
 ```
 ir_capture(port: <legacy-port>, route: "<route>")
 ```
@@ -264,115 +200,195 @@ Save results to `migration.json`:
     "routes": ["/", "/about", "/contact"]
   },
   "captures": {
-    "/": { "ir": <captured-ir>, "elementCount": 150 },
-    "/about": { "ir": <captured-ir>, "elementCount": 89 }
+    "/": { "elementCount": 150, "animationCount": 12 },
+    "/about": { "elementCount": 89, "animationCount": 3 }
   },
   "next": {
     "directory": "./my-next-app",
     "port": 3000
   },
-  "progress": {}
+  "progress": {},
+  "skippedIssues": []
 }
 ```
 
-### 5.4 Analyze JavaScript Patterns
-
-**INVOKE `/vercel-react-best-practices` SKILL BEFORE STARTING THIS PHASE**.
+### 2.3 Analyze JavaScript Patterns
 
 **IMPORTANT**: Legacy JavaScript is ANYTHING that is NOT React or Next.js.
-
-**EXAMPLES**: Sub-set of patterns to review.
 
 Search legacy codebase for patterns that need conversion:
 
 ```bash
 # Find jQuery
 grep -r "jquery\|jQuery\|\\\$(" <legacy-directory> --include="*.js" --include="*.html" --include="*.php"
-```
 
-```bash
 # Find inline handlers
 grep -r "onclick=\|onsubmit=\|onchange=" <legacy-directory> --include="*.html" --include="*.php"
 ```
 
 Document findings in `migration.json` under `legacy.javascript`.
 
-### 5.5 Copy Assets
+### 2.4 Install Conditional Dependencies
 
+Based on discovery results:
+
+If animations were detected in any `ir_capture`:
 ```bash
-mkdir -p <next-project>/public
-cp -r <legacy-directory>/images/* <next-project>/public/images/ 2>/dev/null || true
-cp -r <legacy-directory>/fonts/* <next-project>/public/fonts/ 2>/dev/null || true
-cp -r <legacy-directory>/assets/* <next-project>/public/assets/ 2>/dev/null || true
+cd <next-project>
+bun add framer-motion
 ```
 
 ---
 
-## PHASE 6: MIGRATION
+## PHASE 3: MIGRATE (PER ROUTE)
 
-### CRITICAL RULES - VIOLATIONS ARE FAILURES
+For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4.
 
-**FORBIDDEN - NEVER USE THESE:**
-- `dangerouslySetInnerHTML` - NEVER use to copy legacy HTML
-- `onclick="..."` or any inline event handlers in output
+### CRITICAL RULES — VIOLATIONS ARE FAILURES
+
+**FORBIDDEN:**
+- `dangerouslySetInnerHTML` — NEVER use to copy legacy HTML
+- `onclick="..."` or any inline event handlers
 - Legacy CSS class names (must convert to Tailwind)
 - jQuery or any jQuery patterns
 - `<script>` tags with inline JavaScript
 - `class=` instead of `className=`
 
-**REQUIRED - ALWAYS USE THESE:**
+**REQUIRED:**
 - Proper JSX with `className`
 - React event handlers (`onClick={handler}`)
-- Tailwind CSS utilities (convert from captured styles)
+- Tailwind CSS utilities (convert from captured styles — see Appendix A)
 - `next/image` for images
 - `next/font` for fonts
 - Server Components by default
 - `'use client'` only when needed
 
-### 6.1 For Each Route
+### 3.1 Build Page
 
-#### Step 1: Load Skills
+Read captured IR from `migration.json` for this route.
 
-```
-/vercel-react-best-practices
-/next-best-practices
-/web-design-guidelines
-```
-
-**You MUST invoke these skills. They contain critical patterns.**
-
-#### Step 2: Read Captured IR
-
-Read from `migration.json` the captured IR for this route.
-
-Use `ir_element(site: "legacy", selector: "...")` to inspect specific elements.
-
-#### Step 3: Create Page
+Use `ir_inspect(selector: "...", site: "legacy")` to inspect specific elements.
 
 Based on captured IR:
 1. Create `app/<route>/page.tsx`
 2. Convert layout structure to JSX
-3. **Convert captured computed styles to Tailwind** (see mapping below)
-4. Convert event handlers to React patterns using /vercel-react-best-practices skill
+3. Convert captured computed styles to Tailwind (see Appendix A)
+4. Convert event handlers to React patterns
 5. Create components for reusable parts (header, footer)
-6. **Recreate animations** using captured animation data
+6. Recreate animations using captured animation data (see Appendix B)
 
-**Example conversion:**
-```tsx
-// WRONG - copying HTML
-<div dangerouslySetInnerHTML={{ __html: legacyHtml }} />
+### 3.2 Code Quality Gate
 
-// CORRECT - proper React with Tailwind from captured styles
-<div className="flex items-center gap-4 bg-[#c41e3a] px-5 py-4">
-  <button onClick={handleClick} className="rounded bg-white px-4 py-2">
-    Click me
-  </button>
-</div>
+**BEFORE visual validation**, verify no anti-patterns:
+
+```bash
+grep -r "dangerouslySetInnerHTML" <next-project>/src/
+grep -r 'onclick="' <next-project>/src/
+grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
+grep -r 'style={{' <next-project>/src/ --include="*.tsx" --include="*.jsx"
+grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
+grep -r "from ['\"]jquery['\"]" <next-project>/src/
 ```
 
-#### Captured Styles → Tailwind Mapping
+**ALL MUST RETURN**: No results. Fix any violations before proceeding.
 
-Use `ir_element(site: "legacy", selector: "...")` to get computed styles, then convert:
+### 3.3 Visual Validation Loop
+
+Start watch mode:
+```
+ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
+```
+
+Loop until match >= 95%:
+```
+result = ir_next()
+
+IF result.clsBlocked:
+  - CLS score is above 0.1 — ir_next REFUSES to serve other issues
+  - Read result.cls.topShifters to identify which elements shifted
+  - Fix using result.suggestedFixes:
+    1. Font shift → next/font with display: "swap", adjustFontFallback: true
+    2. Image shift → next/image with explicit width + height
+    3. Dynamic content → min-height or skeleton placeholders
+    4. Embeds → fixed aspect-ratio container
+  - Save file → watch recaptures → call ir_next again
+  - Repeat until clsBlocked is gone
+
+IF result.regressionBlocked:
+  - New issues were introduced — fix the regression first
+  - Save file → watch recaptures → call ir_next again
+
+IF result.issue exists:
+  - Read issue details (selector, styles, position)
+  - Fix the specific issue using Tailwind
+  - Save file → wait for rebuild → call ir_next again
+  - After 3 failed attempts on the same issue: ir_next(skip: true)
+  - Document skipped issue in migration.json under skippedIssues
+
+IF result.complete or match >= 95%:
+  - Proceed to 3.4
+```
+
+**CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
+
+### 3.4 Verify and Mark Complete
+
+```
+ir_status()
+```
+
+Confirm:
+- `match >= 95%`
+- `clsBlocked: false`
+- `clsRating: "good"`
+
+Mark route complete in `migration.json`. Move to next route.
+
+If only skipped issues remain and match is below 95%: mark route for human review and continue.
+
+---
+
+## PHASE 4: COMPLETION
+
+### 4.1 Generate Report
+
+Create `MIGRATION_REPORT.md` with:
+- Summary (routes migrated, match percentages)
+- Per-route breakdown
+- Skipped issues requiring human review
+- Components created
+- Recommendations
+
+### 4.2 Cleanup
+
+```
+ir_stop()
+```
+
+---
+
+## ERROR HANDLING
+
+### MCP tool fails
+Stop and report to user. Do not attempt workarounds.
+
+### Site unreachable
+Stop and ask user to restart the server.
+
+---
+
+## RESUMABILITY
+
+If `migration.json` exists when `/migration` is invoked:
+1. Read existing state
+2. Skip completed routes
+3. Resume from last in-progress route
+
+---
+
+## APPENDIX A: Captured Styles → Tailwind Mapping
+
+Use `ir_inspect(selector: "...", site: "legacy")` to get computed styles, then convert:
 
 **Colors** (backgroundColor, color, borderColor):
 ```
@@ -451,9 +467,11 @@ fontSize: "17px" → text-[17px]
 maxWidth: "1140px" → max-w-[1140px]
 ```
 
-#### Recreating Animations
+---
 
-From captured `animations` data:
+## APPENDIX B: Recreating Animations
+
+From captured `animations` data in `ir_capture`:
 
 **CSS @keyframes → Framer Motion:**
 ```tsx
@@ -470,7 +488,7 @@ import { motion } from 'framer-motion';
 
 **CSS @keyframes → Tailwind animation:**
 ```css
-/* Add to globals.css - copy the captured keyframes rule */
+/* Add to globals.css — copy the captured keyframes rule */
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
@@ -505,219 +523,52 @@ import { AnimatePresence, motion } from 'framer-motion';
 </AnimatePresence>
 ```
 
-#### Step 4: Code Quality Gate
-
-**BEFORE visual validation**, verify no anti-patterns:
-
-```bash
-# No dangerouslySetInnerHTML
-grep -r "dangerouslySetInnerHTML" <next-project>/src/
-```
-**MUST RETURN**: No results
-
-```bash
-# No inline event handlers
-grep -r 'onclick="' <next-project>/src/
-```
-**MUST RETURN**: No results
-
-```bash
-# No class= (must be className)
-grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
-```
-**MUST RETURN**: No results
-
-```bash
-# No inline styles (use Tailwind instead)
-grep -r 'style={{' <next-project>/src/ --include="*.tsx" --include="*.jsx"
-```
-**MUST RETURN**: No results (or only for truly dynamic values like width from state)
-
-```bash
-# No legacy CSS class names (should be Tailwind utilities)
-grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
-```
-**MUST RETURN**: No results (catches patterns like `cont_card`, `fill__red`)
-
-```bash
-# No jQuery imports
-grep -r "from ['\"]jquery['\"]" <next-project>/src/
-grep -r "require.*jquery" <next-project>/src/
-```
-**MUST RETURN**: No results
-
-**IF ANY CHECK FAILS**: Fix before proceeding.
-
-#### Step 5: Visual Validation (CLS gate is enforced automatically)
-
-Start watch mode:
-```
-ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
-```
-
-Loop until match >= 95%:
-```
-result = ir_next()
-
-IF result.clsBlocked:
-  - CLS score is above 0.1 — ir_next REFUSES to serve other issues
-  - Read result.cls.topShifters to identify which elements shifted
-  - Fix using result.suggestedFixes:
-    1. Font shift → next/font with display: "swap", adjustFontFallback: true
-    2. Image shift → next/image with explicit width + height
-    3. Dynamic content → min-height or skeleton placeholders
-    4. Embeds → fixed aspect-ratio container
-  - Save file → watch recaptures → call ir_next again
-  - Repeat until clsBlocked is gone
-
-IF result.issue exists:
-  - Read issue details (selector, styles, position)
-  - Fix the specific issue using Tailwind
-  - Save file
-  - Wait for rebuild
-  - Continue loop
-
-IF match >= 95%:
-  - Mark route complete in migration.json
-  - Move to next route
-```
-
-**CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
-
-#### Step 6: Final Verification
-
-```
-ir_status()
-```
-
-Confirm ALL of:
-- `match >= 95%`
-- `clsBlocked: false`
-- `clsRating: "good"`
-
-before marking route complete.
-
 ---
 
-## PHASE 7: COMPLETION
-
-### 7.1 Generate Report
-
-Create `MIGRATION_REPORT.md` with:
-- Summary (routes migrated, match percentages)
-- Per-route breakdown
-- Any routes needing human review
-- Components created
-- Recommendations
-
-### 7.2 Cleanup
-
-```
-ir_stop()
-```
-
----
-
-## MCP TOOLS REFERENCE
+## APPENDIX C: MCP Tools Reference
 
 ### ir_capture
-DETERMINISTIC capture of a page with full JavaScript execution.
+Capture a page's DOM tree, computed styles, animation metadata, and CLS score.
 
-**What it does:**
+```
+ir_capture(port: number, route?: string, width?: number, height?: number)
+```
+
+Deterministic capture sequence:
 1. Waits for network idle
 2. Forces all lazy images to load
-3. Waits for all images to complete
-4. Waits for fonts to load
-5. Extracts animation metadata (BEFORE finishing animations)
-6. Forces all animations to END STATE
-7. Waits for DOM stability
+3. Waits for all images and fonts
+4. Extracts animation metadata (BEFORE finishing animations)
+5. Forces all animations to END STATE
+6. Waits for DOM stability
 
-```
-ir_capture(port: number, route?: string, viewport?: {width, height})
-```
-
-**Returns:**
-- Layout patterns (header, nav, footer, sidebar, main)
-- Component hierarchy
-- Top-level elements with computed styles
-- **Animation data:**
-  - `keyframes`: CSS @keyframes definitions (name + rules)
-  - `animatedElements`: Elements with animations (selector, name, duration, easing, delay)
-  - `transitionElements`: Elements with transitions (selector, property, duration, easing)
-  - `jQueryAnimations`: Detected jQuery animation patterns
-- **CLS data** (`cls`):
-  - `score`: Total Cumulative Layout Shift score
-  - `rating`: `good` (<=0.1), `needs-improvement` (<=0.25), or `poor` (>0.25)
-  - `shiftCount`: Number of individual layout shifts observed
-  - `topShifters`: Top 5 shifts with element selectors, before/after positions, and deltaY
-
-**Using animation data for migration:**
-```tsx
-// Legacy @keyframes captured:
-// { name: "fadeIn", rules: "@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }" }
-
-// Recreate with Framer Motion:
-<motion.div
-  initial={{ opacity: 0 }}
-  animate={{ opacity: 1 }}
-  transition={{ duration: 0.3 }}  // from animatedElements[].duration
->
-
-// Or recreate with CSS:
-// Copy the @keyframes rule to your globals.css
-// Apply: className="animate-[fadeIn_0.3s_ease-in-out]"
-```
+Returns: layout patterns, component hierarchy, top-level elements with styles, animation data (@keyframes, durations, easing, jQuery patterns), CLS data (score, rating, top shifters).
 
 ### ir_start
-Start watch mode for visual validation.
+Start migration watch mode. Captures both sites, diffs, watches for file changes.
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
 Returns: Initial diff and first issue.
 
 ### ir_next
-Get next issue to fix. Blocks during rebuild.
-Returns: Issue with selector, position, styles, suggested fix.
+Get next issue to fix. Blocks on CLS gate and regressions.
+```
+ir_next(skip?: boolean)
+```
+- `skip: true` — skip current issue after failed attempts, advance to next
+- Returns: Issue with selector, position, styles, and fix suggestion.
 
 ### ir_status
-Get current match percentage and issue counts.
+Get migration progress: match percentages, issue counts by severity, CLS score, regression state.
 
-### ir_element
-Deep-dive on specific element.
+### ir_inspect
+Inspect element by selector or text.
 ```
-ir_element(site: "legacy" | "next", selector: string)
+ir_inspect(selector: string, site?: "legacy" | "next" | "both")
 ```
-
-### ir_compare
-Side-by-side element comparison.
-```
-ir_compare(selector: string)
-```
+- `site="legacy"` or `"next"`: full styles, rect, snippet for one side
+- `site="both"` (default): side-by-side comparison with style diffs
 
 ### ir_stop
-Stop watch mode.
-
----
-
-## ERROR HANDLING
-
-### MCP tool fails
-Stop and report to user. Do not attempt workarounds.
-
-### Site unreachable
-Stop and ask user to restart the server.
-
-### Match stuck below 95%
-After 5 attempts on same issue:
-1. Mark route for human review
-2. Document the blocker
-3. Continue with next route
-
----
-
-## RESUMABILITY
-
-If `migration.json` exists when `/migration` is invoked:
-1. Read existing state
-2. Skip completed routes
-3. Resume from last in-progress route
+Stop watch mode and close browser.

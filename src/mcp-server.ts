@@ -1,13 +1,13 @@
 /**
  * MCP Server for Migent
  *
- * Provides tools for Claude Code to autonomously run migration diffs:
- * - ir_capture: Capture a single site's IR (for discovery, before Next.js exists)
+ * Tools:
+ * - ir_capture: Capture a single site's IR
  * - ir_start: Start watch mode, returns initial diff + first issue
- * - ir_next: Get next issue (blocks if waiting for rebuild)
+ * - ir_next: Get next issue (blocks on regression/CLS gates)
  * - ir_status: Check progress
- * - ir_element: Deep-dive on specific element
- * - ir_compare: Side-by-side comparison
+ * - ir_inspect: Deep-dive or side-by-side compare on element(s)
+ * - ir_stop: Stop watch mode
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -27,6 +27,7 @@ import {
   getWatchState,
   isWatching,
   getNextIssue,
+  advanceIssue,
   getRemainingIssueCount,
   formatDiffForMCP,
 } from './watch.js';
@@ -40,20 +41,80 @@ let lastDiff: DiffResult | null = null;
 let discoveredRoutes: string[] = [];
 let detectedViewports: number[] = [];
 
-/**
- * Create the MCP server
- */
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function reply(data: object) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+  };
+}
+
+function errorReply(message: string) {
+  return {
+    content: [{ type: 'text' as const, text: JSON.stringify({ error: message }) }],
+    isError: true as const,
+  };
+}
+
+function validatePort(port: unknown, name: string): number {
+  const n = Number(port);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    throw new Error(`${name} must be an integer between 1 and 65535, got: ${port}`);
+  }
+  return n;
+}
+
+function requireString(val: unknown, name: string): string {
+  if (typeof val !== 'string' || val.trim().length === 0) {
+    throw new Error(`${name} is required and must be a non-empty string.`);
+  }
+  return val.trim();
+}
+
+function formatIssue(issue: DiffResult['issues'][0]) {
+  return {
+    id: issue.id,
+    severity: issue.severity,
+    type: issue.type,
+    message: issue.message,
+    selector: issue.legacy.selector,
+    position: issue.legacy.rect,
+    suggestedFix: issue.suggestedFix,
+    htmlSnippet: issue.legacy.htmlSnippet,
+    styleDiffs: issue.styleDiffs,
+    relatedElements: issue.relatedElements,
+  };
+}
+
+function formatElementSummary(el: ElementIR) {
+  return {
+    id: el.id,
+    selector: el.selector,
+    tag: el.tag,
+    rect: el.rect,
+    text: el.text,
+    fullText: el.fullText.slice(0, 200),
+    styles: el.styles,
+    semanticRole: el.semanticRole,
+    htmlSnippet: el.htmlSnippet,
+    childCount: el.children.length,
+  };
+}
+
+function findElement(pageIR: PageIR, selector: string): ElementIR | undefined {
+  return (
+    pageIR.elements.find((e) => e.selector.includes(selector)) ||
+    findElementByText(pageIR, selector) ||
+    undefined
+  );
+}
+
+// ─── Server ─────────────────────────────────────────────────────────────────
+
 function createServer(): Server {
   const server = new Server(
-    {
-      name: 'migent',
-      version: '1.0.0',
-    },
-    {
-      capabilities: {
-        tools: {},
-      },
-    }
+    { name: 'migent', version: '2.1.0' },
+    { capabilities: { tools: {} } }
   );
 
   // List available tools
@@ -63,27 +124,14 @@ function createServer(): Server {
         {
           name: 'ir_capture',
           description:
-            'DETERMINISTIC page capture with full JavaScript execution. Waits for network idle, forces lazy images to load, waits for all images/fonts, extracts animation metadata (@keyframes, durations, easing), then forces animations to END STATE for consistent capture. Returns complete DOM structure, computed styles, AND animation data for recreating animations in Next.js.',
+            'Capture a page\'s DOM tree, computed styles, animation metadata (@keyframes, easing, durations), and CLS score. Use before ir_start to explore a legacy site.',
           inputSchema: {
             type: 'object',
             properties: {
-              port: {
-                type: 'number',
-                description: 'Port of the site to capture (e.g., 8000 for legacy)',
-              },
-              route: {
-                type: 'string',
-                description: 'Route to capture (e.g., "/about")',
-                default: '/',
-              },
-              viewport: {
-                type: 'object',
-                properties: {
-                  width: { type: 'number', default: 1280 },
-                  height: { type: 'number', default: 800 },
-                },
-                description: 'Viewport size for capture',
-              },
+              port: { type: 'number', description: 'Localhost port (e.g. 8000)' },
+              route: { type: 'string', default: '/' },
+              width: { type: 'number', description: 'Viewport width', default: 1280 },
+              height: { type: 'number', description: 'Viewport height', default: 800 },
             },
             required: ['port'],
           },
@@ -91,32 +139,18 @@ function createServer(): Server {
         {
           name: 'ir_start',
           description:
-            'Start migration watch mode. Captures both sites, runs initial diff, and begins watching for file changes. Returns the first issue to fix.',
+            'Start migration watch mode. Captures both sites, diffs them, watches for file changes. Returns first issue to fix.',
           inputSchema: {
             type: 'object',
             properties: {
-              legacyPort: {
-                type: 'number',
-                description: 'Port of the legacy site (e.g., 8000)',
-              },
-              nextPort: {
-                type: 'number',
-                description: 'Port of the Next.js site (e.g., 3000)',
-              },
-              legacyRoute: {
-                type: 'string',
-                description: 'Route on legacy site (e.g., "/sdc/" or "/")',
-                default: '/',
-              },
-              nextRoute: {
-                type: 'string',
-                description: 'Route on Next.js site (e.g., "/uk/" or "/")',
-                default: '/',
-              },
+              legacyPort: { type: 'number', description: 'Legacy site port' },
+              nextPort: { type: 'number', description: 'Next.js site port' },
+              legacyRoute: { type: 'string', default: '/' },
+              nextRoute: { type: 'string', default: '/' },
               watchPaths: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Paths to watch for changes (defaults to components/ and app/)',
+                description: 'Paths to watch (defaults to components/, app/, src/)',
               },
             },
             required: ['legacyPort', 'nextPort'],
@@ -125,53 +159,40 @@ function createServer(): Server {
         {
           name: 'ir_next',
           description:
-            'Get the next issue to fix. Returns full context including selector, expected styles, suggested fix, and HTML snippet. If a rebuild is pending, waits for it to complete first.',
+            'Get next issue to fix. Blocks if CLS is poor or regressions detected. Pass skip=true to skip current issue after failed attempts.',
           inputSchema: {
             type: 'object',
-            properties: {},
-            required: [],
+            properties: {
+              skip: {
+                type: 'boolean',
+                description: 'Skip current issue and advance to next',
+                default: false,
+              },
+            },
           },
         },
         {
           name: 'ir_status',
           description:
-            'Get current migration status: match percentages, issue counts by severity, and whether regression blocking is active.',
+            'Migration progress: match percentages, issue counts by severity, CLS score, regression state.',
           inputSchema: {
             type: 'object',
             properties: {},
-            required: [],
           },
         },
         {
-          name: 'ir_element',
+          name: 'ir_inspect',
           description:
-            'Get detailed IR for a specific element. Useful for understanding exact styles and structure.',
+            'Inspect element by selector or text. Use site="legacy" or "next" for one side, or "both" for side-by-side diff with only differing styles.',
           inputSchema: {
             type: 'object',
             properties: {
+              selector: { type: 'string', description: 'CSS selector or text content to find' },
               site: {
                 type: 'string',
-                enum: ['legacy', 'next'],
-                description: 'Which site to query',
-              },
-              selector: {
-                type: 'string',
-                description: 'CSS selector or text content to find',
-              },
-            },
-            required: ['site', 'selector'],
-          },
-        },
-        {
-          name: 'ir_compare',
-          description:
-            'Compare a specific element between legacy and Next.js. Shows side-by-side differences.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              selector: {
-                type: 'string',
-                description: 'CSS selector or text content to find and compare',
+                enum: ['legacy', 'next', 'both'],
+                description: 'Which site(s) to inspect',
+                default: 'both',
               },
             },
             required: ['selector'],
@@ -179,11 +200,10 @@ function createServer(): Server {
         },
         {
           name: 'ir_stop',
-          description: 'Stop the watch mode.',
+          description: 'Stop watch mode and close browser.',
           inputSchema: {
             type: 'object',
             properties: {},
-            required: [],
           },
         },
       ],
@@ -196,28 +216,24 @@ function createServer(): Server {
 
     try {
       switch (name) {
+        // ── ir_capture ────────────────────────────────────────────────
         case 'ir_capture': {
-          const {
-            port,
-            route = '/',
-            viewport: viewportArg,
-          } = args as {
-            port: number;
-            route?: string;
-            viewport?: { width?: number; height?: number };
-          };
-
+          const a = args as Record<string, unknown>;
+          const port = validatePort(a.port, 'port');
+          const route = typeof a.route === 'string' ? a.route : '/';
           const viewport = {
-            width: viewportArg?.width || 1280,
-            height: viewportArg?.height || 800,
+            width: typeof a.width === 'number' && a.width > 0 ? a.width : 1280,
+            height: typeof a.height === 'number' && a.height > 0 ? a.height : 800,
           };
 
-          // Deterministic capture: waits for images, fonts, forces animations to end state
           const pageIR = await capturePage(port, route, viewport);
 
-          // Build component hierarchy from elements
+          // Component hierarchy (semantic elements only)
           const componentHierarchy = pageIR.elements
-            .filter((el) => ['header', 'nav', 'main', 'footer', 'aside', 'section', 'article'].includes(el.tag) || el.semanticRole)
+            .filter((el) =>
+              ['header', 'nav', 'main', 'footer', 'aside', 'section', 'article'].includes(el.tag) ||
+              el.semanticRole
+            )
             .map((el) => ({
               tag: el.tag,
               selector: el.selector,
@@ -226,7 +242,7 @@ function createServer(): Server {
               childCount: el.children.length,
             }));
 
-          // Extract layout patterns
+          // Layout patterns
           const layoutPatterns = {
             hasHeader: pageIR.elements.some((el) => el.tag === 'header' || el.semanticRole === 'banner'),
             hasNav: pageIR.elements.some((el) => el.tag === 'nav' || el.semanticRole === 'navigation'),
@@ -235,103 +251,86 @@ function createServer(): Server {
             hasMain: pageIR.elements.some((el) => el.tag === 'main' || el.semanticRole === 'main'),
           };
 
-          // Store for later use with ir_element
+          // Store for later inspect
           legacyPageIR = pageIR;
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    success: true,
-                    url: pageIR.url,
-                    title: pageIR.meta.title,
-                    viewport: pageIR.viewport,
-                    elementCount: pageIR.elements.length,
-                    layoutPatterns,
-                    componentHierarchy: componentHierarchy.slice(0, 20),
-                    // Top-level elements for understanding structure
-                    topLevelElements: pageIR.elements
-                      .filter((el) => !el.selector.includes(' > ') || el.selector.split(' > ').length <= 2)
-                      .slice(0, 30)
-                      .map((el) => ({
-                        tag: el.tag,
-                        selector: el.selector,
-                        rect: el.rect,
-                        text: el.text.slice(0, 50),
-                        styles: {
-                          display: el.styles.display,
-                          position: el.styles.position,
-                          backgroundColor: el.styles.backgroundColor,
-                        },
-                      })),
-                    // Animation data for recreating in Next.js
-                    animations: pageIR.animations ? {
-                      keyframeCount: pageIR.animations.keyframes.length,
-                      keyframes: pageIR.animations.keyframes.slice(0, 10),
-                      animatedElementCount: pageIR.animations.animatedElements.length,
-                      animatedElements: pageIR.animations.animatedElements.slice(0, 20),
-                      transitionElementCount: pageIR.animations.transitionElements.length,
-                      transitionElements: pageIR.animations.transitionElements.slice(0, 20),
-                      jQueryAnimations: pageIR.animations.jQueryAnimations,
-                    } : null,
-                    // CLS (Cumulative Layout Shift) data
-                    cls: pageIR.cls ? {
-                      score: pageIR.cls.score,
-                      rating: pageIR.cls.rating,
-                      shiftCount: pageIR.cls.shifts.length,
-                      topShifters: pageIR.cls.shifts
-                        .sort((a, b) => b.value - a.value)
-                        .slice(0, 5)
-                        .map((s) => ({
-                          value: s.value,
-                          elements: s.sources.map((src) => ({
-                            selector: src.selector,
-                            tag: src.tag,
-                            movedFrom: { x: Math.round(src.previousRect.x), y: Math.round(src.previousRect.y) },
-                            movedTo: { x: Math.round(src.currentRect.x), y: Math.round(src.currentRect.y) },
-                            deltaY: Math.round(src.currentRect.y - src.previousRect.y),
-                          })),
-                        })),
-                    } : null,
-                    // Full elements available via ir_element for deep-dive
-                    message: 'Use ir_element for element details. Animation data includes @keyframes, durations, easing for recreation in Framer Motion or CSS.',
-                  },
-                  null,
-                  2
-                ),
+          // Top-level elements (cap at 20)
+          const topLevelElements = pageIR.elements
+            .filter((el) => !el.selector.includes(' > ') || el.selector.split(' > ').length <= 2)
+            .slice(0, 20)
+            .map((el) => ({
+              tag: el.tag,
+              selector: el.selector,
+              rect: el.rect,
+              text: el.text.slice(0, 50),
+              styles: {
+                display: el.styles.display,
+                position: el.styles.position,
+                backgroundColor: el.styles.backgroundColor,
               },
-            ],
-          };
+            }));
+
+          // Animations — show counts + capped sample; diff loop catches the rest
+          const animations = pageIR.animations
+            ? {
+                keyframeCount: pageIR.animations.keyframes.length,
+                keyframes: pageIR.animations.keyframes.slice(0, 10),
+                animatedElementCount: pageIR.animations.animatedElements.length,
+                animatedElements: pageIR.animations.animatedElements.slice(0, 10),
+                transitionElementCount: pageIR.animations.transitionElements.length,
+                transitionElements: pageIR.animations.transitionElements.slice(0, 10),
+                jQueryAnimations: pageIR.animations.jQueryAnimations,
+              }
+            : null;
+
+          // CLS (top 3 shifters)
+          const cls = pageIR.cls
+            ? {
+                score: pageIR.cls.score,
+                rating: pageIR.cls.rating,
+                shiftCount: pageIR.cls.shifts.length,
+                topShifters: pageIR.cls.shifts
+                  .sort((a, b) => b.value - a.value)
+                  .slice(0, 3)
+                  .map((s) => ({
+                    value: s.value,
+                    elements: s.sources.map((src) => ({
+                      selector: src.selector,
+                      tag: src.tag,
+                      movedFrom: { x: Math.round(src.previousRect.x), y: Math.round(src.previousRect.y) },
+                      movedTo: { x: Math.round(src.currentRect.x), y: Math.round(src.currentRect.y) },
+                      deltaY: Math.round(src.currentRect.y - src.previousRect.y),
+                    })),
+                  })),
+              }
+            : null;
+
+          return reply({
+            url: pageIR.url,
+            title: pageIR.meta.title,
+            viewport: pageIR.viewport,
+            elementCount: pageIR.elements.length,
+            layoutPatterns,
+            componentHierarchy,
+            topLevelElements,
+            animations,
+            cls,
+          });
         }
 
+        // ── ir_start ──────────────────────────────────────────────────
         case 'ir_start': {
-          const {
-            legacyPort,
-            nextPort,
-            legacyRoute = '/',
-            nextRoute = '/',
-            watchPaths,
-          } = args as {
-            legacyPort: number;
-            nextPort: number;
-            legacyRoute?: string;
-            nextRoute?: string;
-            watchPaths?: string[];
-          };
+          const a = args as Record<string, unknown>;
+          const legacyPort = validatePort(a.legacyPort, 'legacyPort');
+          const nextPort = validatePort(a.nextPort, 'nextPort');
+          const legacyRoute = typeof a.legacyRoute === 'string' ? a.legacyRoute : '/';
+          const nextRoute = typeof a.nextRoute === 'string' ? a.nextRoute : '/';
+          const watchPaths = Array.isArray(a.watchPaths) ? (a.watchPaths as string[]) : undefined;
 
           if (isWatching()) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
-                  }),
-                },
-              ],
-            };
+            return reply({
+              error: 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
+            });
           }
 
           // Discover routes and breakpoints
@@ -343,7 +342,6 @@ function createServer(): Server {
             detectedViewports = [1280];
           }
 
-          // Default watch paths
           const defaultWatchPaths = watchPaths || [
             process.cwd() + '/components',
             process.cwd() + '/app',
@@ -358,7 +356,7 @@ function createServer(): Server {
           // Run initial diff
           lastDiff = diffPages(legacyPageIR, nextPageIR);
 
-          // Start watch mode (non-blocking)
+          // Start watch mode (non-blocking, log errors)
           startWatch({
             legacyPort,
             nextPort,
@@ -368,95 +366,51 @@ function createServer(): Server {
             onDiff: (diff) => {
               lastDiff = diff;
             },
-          }).catch(console.error);
+            onError: (err) => {
+              console.error('Watch error:', err.message);
+            },
+          }).catch((err) => console.error('Watch startup failed:', err));
 
-          // Get first issue
           const firstIssue = lastDiff.issues[0] || null;
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    success: true,
-                    message: `Watch mode started. ${lastDiff.issues.length} issues found.`,
-                    routes: discoveredRoutes.slice(0, 10),
-                    viewports: detectedViewports,
-                    match: lastDiff.match,
-                    totalIssues: lastDiff.issues.length,
-                    firstIssue: firstIssue
-                      ? {
-                          id: firstIssue.id,
-                          severity: firstIssue.severity,
-                          type: firstIssue.type,
-                          message: firstIssue.message,
-                          selector: firstIssue.legacy.selector,
-                          position: firstIssue.legacy.rect,
-                          suggestedFix: firstIssue.suggestedFix,
-                          htmlSnippet: firstIssue.legacy.htmlSnippet,
-                          styleDiffs: firstIssue.styleDiffs,
-                        }
-                      : null,
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return reply({
+            success: true,
+            message: `Watch mode started. ${lastDiff.issues.length} issues found.`,
+            routes: discoveredRoutes.slice(0, 10),
+            viewports: detectedViewports,
+            match: lastDiff.match,
+            totalIssues: lastDiff.issues.length,
+            firstIssue: firstIssue ? formatIssue(firstIssue) : null,
+          });
         }
 
+        // ── ir_next ───────────────────────────────────────────────────
         case 'ir_next': {
+          const a = args as Record<string, unknown>;
+          const skip = a.skip === true;
+
+          // Skip current issue before fetching next
+          if (skip) {
+            advanceIssue();
+          }
+
           const state = getWatchState();
 
           if (!state.lastDiff) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: 'No diff available. Run ir_start first.',
-                  }),
-                },
-              ],
-            };
+            return errorReply('No diff available. Run ir_start first.');
           }
 
-          // Check for regressions
+          // Regression gate
           if (state.regressionDetected) {
             const issue = state.lastDiff.issues[0];
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      regressionBlocked: true,
-                      message: `REGRESSION: ${state.regressionCount} new issues detected. Fix these first.`,
-                      issue: issue
-                        ? {
-                            id: issue.id,
-                            severity: issue.severity,
-                            type: issue.type,
-                            message: issue.message,
-                            selector: issue.legacy.selector,
-                            position: issue.legacy.rect,
-                            suggestedFix: issue.suggestedFix,
-                            htmlSnippet: issue.legacy.htmlSnippet,
-                            styleDiffs: issue.styleDiffs,
-                          }
-                        : null,
-                    },
-                    null,
-                    2
-                  ),
-                },
-              ],
-            };
+            return reply({
+              regressionBlocked: true,
+              message: `REGRESSION: ${state.regressionCount} new issues detected. Fix these first.`,
+              issue: issue ? formatIssue(issue) : null,
+            });
           }
 
-          // Check CLS gate — block until CLS is "good"
+          // CLS gate
           const nextCLS = state.lastDiff.cls?.next;
           if (nextCLS && nextCLS.rating !== 'good') {
             const topShifters = nextCLS.shifts
@@ -470,243 +424,106 @@ function createServer(): Server {
                 })),
               }));
 
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify(
-                    {
-                      clsBlocked: true,
-                      message: `CLS BLOCKED: Score ${nextCLS.score.toFixed(3)} (${nextCLS.rating}). Must be <= 0.1 ("good") to proceed. Fix layout shifts first.`,
-                      cls: {
-                        score: nextCLS.score,
-                        rating: nextCLS.rating,
-                        topShifters,
-                      },
-                      suggestedFixes: [
-                        'Use next/font with display: "swap" and adjustFontFallback: true for all fonts',
-                        'Use next/image with explicit width and height for all images',
-                        'Add min-height or skeleton placeholders for dynamically loaded content',
-                        'Wrap third-party embeds in fixed aspect-ratio containers',
-                      ],
-                    },
-                    null,
-                    2
-                  ),
-                },
+            return reply({
+              clsBlocked: true,
+              message: `CLS BLOCKED: Score ${nextCLS.score.toFixed(3)} (${nextCLS.rating}). Must be <= 0.1 ("good") to proceed. Fix layout shifts first.`,
+              cls: { score: nextCLS.score, rating: nextCLS.rating, topShifters },
+              suggestedFixes: [
+                'Use next/font with display: "swap" and adjustFontFallback: true for all fonts',
+                'Use next/image with explicit width and height for all images',
+                'Add min-height or skeleton placeholders for dynamically loaded content',
+                'Wrap third-party embeds in fixed aspect-ratio containers',
               ],
-            };
+            });
           }
 
-          // Get next issue
+          // Next issue
           const issue = getNextIssue();
           const remaining = getRemainingIssueCount();
 
           if (!issue) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    complete: true,
-                    message: 'No more issues! Migration appears complete.',
-                    match: state.lastDiff.match,
-                  }),
-                },
-              ],
-            };
+            return reply({
+              complete: true,
+              message: 'No more issues! Migration appears complete.',
+              match: state.lastDiff.match,
+            });
           }
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    status: state.status,
-                    remaining,
-                    progress: {
-                      fixed: state.lastDiff.issues.length - remaining,
-                      total: state.lastDiff.issues.length,
-                      percentage: Math.round(
-                        ((state.lastDiff.issues.length - remaining) /
-                          state.lastDiff.issues.length) *
-                          100
-                      ),
-                    },
-                    issue: {
-                      id: issue.id,
-                      severity: issue.severity,
-                      type: issue.type,
-                      message: issue.message,
-                      selector: issue.legacy.selector,
-                      position: issue.legacy.rect,
-                      suggestedFix: issue.suggestedFix,
-                      htmlSnippet: issue.legacy.htmlSnippet,
-                      styleDiffs: issue.styleDiffs,
-                      relatedElements: issue.relatedElements,
-                    },
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return reply({
+            status: state.status,
+            remaining,
+            progress: {
+              fixed: state.lastDiff.issues.length - remaining,
+              total: state.lastDiff.issues.length,
+              percentage: Math.round(
+                ((state.lastDiff.issues.length - remaining) / state.lastDiff.issues.length) * 100
+              ),
+            },
+            issue: formatIssue(issue),
+          });
         }
 
+        // ── ir_status ─────────────────────────────────────────────────
         case 'ir_status': {
           const state = getWatchState();
 
           if (!state.lastDiff) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    status: state.status,
-                    message: 'No diff available. Run ir_start first.',
-                  }),
-                },
-              ],
-            };
+            return reply({ status: state.status, message: 'No diff available. Run ir_start first.' });
           }
 
           const critical = state.lastDiff.issues.filter((i) => i.severity === 'critical').length;
           const major = state.lastDiff.issues.filter((i) => i.severity === 'major').length;
           const minor = state.lastDiff.issues.length - critical - major;
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    status: state.status,
-                    iteration: state.iteration,
-                    match: state.lastDiff.match,
-                    issues: {
-                      total: state.lastDiff.issues.length,
-                      critical,
-                      major,
-                      minor,
-                    },
-                    regressionBlocked: state.regressionDetected,
-                    regressionCount: state.regressionCount,
-                    clsBlocked: state.lastDiff.cls?.next ? state.lastDiff.cls.next.rating !== 'good' : false,
-                    clsScore: state.lastDiff.cls?.next?.score ?? null,
-                    clsRating: state.lastDiff.cls?.next?.rating ?? null,
-                    stats: state.lastDiff.stats,
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return reply({
+            status: state.status,
+            iteration: state.iteration,
+            match: state.lastDiff.match,
+            issues: { total: state.lastDiff.issues.length, critical, major, minor },
+            regressionBlocked: state.regressionDetected,
+            regressionCount: state.regressionCount,
+            clsBlocked: state.lastDiff.cls?.next ? state.lastDiff.cls.next.rating !== 'good' : false,
+            clsScore: state.lastDiff.cls?.next?.score ?? null,
+            clsRating: state.lastDiff.cls?.next?.rating ?? null,
+            stats: state.lastDiff.stats,
+          });
         }
 
-        case 'ir_element': {
-          const { site, selector } = args as { site: 'legacy' | 'next'; selector: string };
+        // ── ir_inspect (merged ir_element + ir_compare) ──────────────
+        case 'ir_inspect': {
+          const a = args as Record<string, unknown>;
+          const selector = requireString(a.selector, 'selector');
+          const site = typeof a.site === 'string' ? a.site : 'both';
 
-          const pageIR = site === 'legacy' ? legacyPageIR : nextPageIR;
-          if (!pageIR) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: `No ${site} IR available. Run ir_start first.`,
-                  }),
-                },
-              ],
-            };
+          if (site === 'legacy' || site === 'next') {
+            // Single-site deep-dive
+            const pageIR = site === 'legacy' ? legacyPageIR : nextPageIR;
+            if (!pageIR) {
+              return errorReply(`No ${site} IR available. Run ir_capture or ir_start first.`);
+            }
+
+            const element = findElement(pageIR, selector);
+            if (!element) {
+              return reply({ found: false, message: `Element not found: ${selector}` });
+            }
+
+            return reply({ found: true, element: formatElementSummary(element) });
           }
 
-          // Try to find by selector first
-          let element = pageIR.elements.find((e) => e.selector.includes(selector));
-
-          // Try by text content
-          if (!element) {
-            element = findElementByText(pageIR, selector) || undefined;
-          }
-
-          if (!element) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    found: false,
-                    message: `Element not found: ${selector}`,
-                  }),
-                },
-              ],
-            };
-          }
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    found: true,
-                    element: {
-                      id: element.id,
-                      selector: element.selector,
-                      tag: element.tag,
-                      rect: element.rect,
-                      text: element.text,
-                      fullText: element.fullText.slice(0, 200),
-                      styles: element.styles,
-                      semanticRole: element.semanticRole,
-                      htmlSnippet: element.htmlSnippet,
-                      childCount: element.children.length,
-                    },
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
-        }
-
-        case 'ir_compare': {
-          const { selector } = args as { selector: string };
-
+          // Both sides — side-by-side comparison
           if (!legacyPageIR || !nextPageIR) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: 'No IR available. Run ir_start first.',
-                  }),
-                },
-              ],
-            };
+            return errorReply('No IR available. Run ir_start first.');
           }
 
-          // Find in both
-          let legacyEl = legacyPageIR.elements.find((e) => e.selector.includes(selector));
-          let nextEl = nextPageIR.elements.find((e) => e.selector.includes(selector));
+          let legacyEl = findElement(legacyPageIR, selector);
+          let nextEl = findElement(nextPageIR, selector);
 
-          // Try by text
-          if (!legacyEl) {
-            legacyEl = findElementByText(legacyPageIR, selector) || undefined;
-          }
-          if (!nextEl) {
-            nextEl = findElementByText(nextPageIR, selector) || undefined;
-          }
-
-          // Try by position if we found legacy
+          // Position fallback: if we found legacy but not next, try matching by position
           if (legacyEl && !nextEl) {
             nextEl = findElementByPosition(nextPageIR, legacyEl.rect, 50) || undefined;
           }
 
-          const formatElement = (el: ElementIR | undefined) =>
+          const formatEl = (el: ElementIR | undefined) =>
             el
               ? {
                   selector: el.selector,
@@ -718,81 +535,42 @@ function createServer(): Server {
                 }
               : null;
 
-          // Find style differences if both exist
+          // Style diffs called out explicitly for quick scanning
           const styleDiffs: { property: string; legacy: string; next: string }[] = [];
           if (legacyEl && nextEl) {
             for (const [key, legacyVal] of Object.entries(legacyEl.styles)) {
               const nextVal = (nextEl.styles as unknown as Record<string, string>)[key];
               if (legacyVal !== nextVal) {
-                styleDiffs.push({
-                  property: key,
-                  legacy: legacyVal,
-                  next: nextVal || '(none)',
-                });
+                styleDiffs.push({ property: key, legacy: legacyVal, next: nextVal || '(none)' });
               }
             }
           }
 
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(
-                  {
-                    legacy: formatElement(legacyEl),
-                    next: formatElement(nextEl),
-                    styleDifferences: styleDiffs.slice(0, 20),
-                    layoutMatch: legacyEl && nextEl
-                      ? Math.abs(legacyEl.rect.width - nextEl.rect.width) < 20 &&
-                        Math.abs(legacyEl.rect.height - nextEl.rect.height) < 20
-                      : false,
-                    contentMatch: legacyEl && nextEl
-                      ? legacyEl.text === nextEl.text
-                      : false,
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-          };
+          return reply({
+            legacy: formatEl(legacyEl),
+            next: formatEl(nextEl),
+            styleDifferences: styleDiffs,
+            layoutMatch:
+              legacyEl && nextEl
+                ? Math.abs(legacyEl.rect.width - nextEl.rect.width) < 20 &&
+                  Math.abs(legacyEl.rect.height - nextEl.rect.height) < 20
+                : false,
+            contentMatch: legacyEl && nextEl ? legacyEl.text === nextEl.text : false,
+          });
         }
 
+        // ── ir_stop ───────────────────────────────────────────────────
         case 'ir_stop': {
           stopWatch();
           await closeBrowser();
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  success: true,
-                  message: 'Watch mode stopped.',
-                }),
-              },
-            ],
-          };
+          return reply({ success: true, message: 'Watch mode stopped.' });
         }
 
         default:
-          return {
-            content: [{ type: 'text', text: `Unknown tool: ${name}` }],
-            isError: true,
-          };
+          return errorReply(`Unknown tool: ${name}`);
       }
     } catch (error) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          },
-        ],
-        isError: true,
-      };
+      return errorReply(error instanceof Error ? error.message : String(error));
     }
   });
 
@@ -809,17 +587,14 @@ async function main() {
   await server.connect(transport);
 
   // Cleanup on exit
-  process.on('SIGINT', async () => {
+  const cleanup = async () => {
     stopWatch();
     await closeBrowser();
     process.exit(0);
-  });
+  };
 
-  process.on('SIGTERM', async () => {
-    stopWatch();
-    await closeBrowser();
-    process.exit(0);
-  });
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 }
 
 main().catch(console.error);

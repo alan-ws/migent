@@ -1,124 +1,77 @@
 # Migent
 
-Autonomous site migration tool that helps Claude Code achieve visual match between legacy and Next.js sites.
+Autonomous site migration tool that helps coding agents achieve visual match between legacy and Next.js sites.
 
-## Features
+## What It Does
 
-- **Position-based matching** — Matches elements by visual position and content, not by selectors
-- **Auto-discovery** — Finds routes via sitemap or crawling, detects CSS breakpoints
-- **Watch mode** — Continuous diff loop until migration complete
-- **Regression blocking** — Prevents progress if changes introduce new issues
-- **MCP integration** — Works with Claude Code for autonomous fixing
+Migent runs as an MCP server that provides tools for coding agents (Claude Code) to autonomously migrate websites. It captures pages with Playwright, matches elements by visual position, diffs computed styles, and feeds issues one at a time through an iterative fix loop with regression blocking and CLS gates.
 
 ## Installation
 
 ```bash
 npm install -g migent
-# or
-npx migent
 ```
 
-## Quick Start
+## MCP Configuration
 
-```bash
-# One-shot diff
-migent --legacy 8000 --next 3000
-
-# Watch mode (continuous)
-migent watch --legacy 8000 --next 3000
-
-# Discover routes
-migent discover --legacy 8000
-```
-
-## CLI Usage
-
-```
-migent --legacy PORT --next PORT [options]    One-shot diff
-migent watch --legacy PORT --next PORT        Watch mode
-migent discover --legacy PORT                 Discover routes
-
-Options:
-  --legacy PORT          Port of legacy site
-  --next PORT            Port of Next.js site
-  --legacy-route PATH    Route on legacy site (default: /)
-  --next-route PATH      Route on Next.js site (default: /)
-  --route PATH           Same route for both sites
-  --watch-dir PATH       Additional directory to watch
-```
-
-## Config File
-
-Create `migent.config.json` in your project root:
-
-```json
-{
-  "legacyPort": 8000,
-  "nextPort": 3000,
-  "legacyRoute": "/",
-  "nextRoute": "/",
-  "watchPaths": ["./components", "./app"]
-}
-```
-
-## MCP Server
-
-For Claude Code integration:
-
-```bash
-node dist/mcp-server.js
-```
-
-Add to your Claude Code MCP config:
+Add to `.mcp.json` in your workspace root:
 
 ```json
 {
   "mcpServers": {
     "migent": {
-      "command": "node",
-      "args": ["/path/to/migent/dist/mcp-server.js"]
+      "command": "npx",
+      "args": ["-y", "migent", "mcp"]
     }
   }
 }
 ```
 
-### MCP Tools
+## MCP Tools
 
 | Tool | Description |
 |------|-------------|
-| `ir_start` | Start watch mode, returns initial diff + first issue |
-| `ir_next` | Get next issue to fix (blocks if rebuild pending) |
-| `ir_status` | Check progress: match %, issues, regression status |
-| `ir_element` | Get detailed IR for a specific element |
-| `ir_compare` | Side-by-side comparison of legacy vs next |
-| `ir_stop` | Stop watch mode |
+| `ir_capture` | Capture a page's DOM, computed styles, animations, and CLS score |
+| `ir_start` | Start watch mode — captures both sites, diffs, watches for file changes |
+| `ir_next` | Get next issue to fix (blocks on CLS gate and regressions) |
+| `ir_status` | Migration progress: match %, issue counts, CLS score |
+| `ir_inspect` | Inspect element: one side or side-by-side diff |
+| `ir_stop` | Stop watch mode and close browser |
 
-### Agent Flow
+## Agent Flow
 
 ```
-Claude: [calls ir_start with ports]
-Tool:   "47 issues found. Here's issue #1: ..."
+Agent: ir_start(legacyPort: 8000, nextPort: 3000)
+Tool:  "47 issues found. Here's issue #1: ..."
 
-Claude: [edits component file]
-Tool:   [detects change, waits for rebuild, re-diffs]
-        "46 issues remain."
+Agent: [edits component file, saves]
+Tool:  [detects change, waits for rebuild, re-captures, re-diffs]
 
-Claude: [calls ir_next]
-Tool:   "Issue #2: ..."
+Agent: ir_next()
+Tool:  "46 issues remain. Issue #2: ..."
 
-... repeat until complete ...
+... repeat until match >= 95% ...
+
+Agent: ir_next(skip: true)   ← skip stubborn issues after 3 attempts
+Agent: ir_status()           ← confirm match % and CLS rating
+Agent: ir_stop()
 ```
+
+### Gates
+
+- **CLS Gate** — `ir_next` refuses to serve style issues until CLS score is "good" (<= 0.1)
+- **Regression Gate** — `ir_next` blocks if new issues were introduced by the last edit
 
 ## How It Works
 
-1. **Capture** — Uses Playwright to capture both sites' DOM + computed styles
-2. **Match** — Pairs elements by position (bounding box), content (text), and semantic role
-3. **Diff** — Compares matched pairs for style differences
-4. **Report** — Returns actionable issues with suggested fixes
+1. **Capture** — Playwright captures both sites with deterministic sequencing (network idle, lazy images, font loading, animation force-finish, DOM stability wait)
+2. **Match** — Elements paired by visual position (bounding box IoU), text content, and semantic role
+3. **Diff** — Matched pairs compared for style differences across 60 computed CSS properties
+4. **Iterate** — Issues served one at a time; file watcher triggers re-diff on save
 
 ### Position-Based Matching
 
-Unlike selector-based tools, Migent matches elements by their **visual output**:
+Unlike selector-based tools, Migent matches by **visual output**:
 
 ```
 Legacy: <div id="hero"> at (0, 0, 1280, 600)
@@ -129,26 +82,24 @@ Next:   <section className="..."> at (0, 0, 1280, 600)
 → Report differences
 ```
 
-This allows modernization (Tailwind, different class names, semantic HTML) while ensuring visual fidelity.
+This allows full modernisation (Tailwind, semantic HTML, new component structure) while ensuring visual fidelity.
 
-## Output
+## CLI
 
-Diffs are saved to `.migent/`:
+The CLI is a thin launcher for the MCP server:
 
-```
-.migent/
-└── -route-/
-    └── diff.json
+```bash
+migent mcp          # Start MCP server (stdio)
+migent --version    # Print version
+migent --help       # Show help
 ```
 
 ## Development
 
 ```bash
-cd tools/ir-tool
 npm install
 npx playwright install chromium
 npm run build
-npm start -- --legacy 8000 --next 3000
 ```
 
 ## License
