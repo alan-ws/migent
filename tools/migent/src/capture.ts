@@ -271,11 +271,20 @@ export async function capturePage(
       }
     });
 
-    // 1. Navigate and wait for network idle
-    const navResponse = await page.goto(url, {
-      waitUntil: 'networkidle',
-      timeout: 30000,
-    });
+    // 1. Navigate and wait for network idle (fall back to load if site has persistent connections)
+    let navResponse;
+    try {
+      navResponse = await page.goto(url, {
+        waitUntil: 'networkidle',
+        timeout: 15000,
+      });
+    } catch {
+      // networkidle timed out — site has polling/websockets/analytics; fall back to load
+      navResponse = await page.goto(url, {
+        waitUntil: 'load',
+        timeout: 15000,
+      });
+    }
 
     // Detect JS-based redirects (final URL differs from requested)
     const finalUrl = page.url();
@@ -370,8 +379,10 @@ export async function capturePage(
       return fonts;
     });
 
-    // Wait for network to settle again after lazy loading
-    await page.waitForLoadState('networkidle');
+    // Wait for network to settle again after lazy loading (bounded)
+    await page.waitForLoadState('networkidle').catch(() => {
+      // networkidle timed out after lazy load — proceed anyway
+    });
 
     // 5. Extract animation metadata BEFORE we finish animations
     const animationData = await page.evaluate((): AnimationData => {
@@ -829,7 +840,7 @@ export async function waitForPageReady(
     while (Date.now() - startTime < timeoutMs) {
       try {
         const response = await page.goto(url, {
-          waitUntil: 'networkidle',
+          waitUntil: 'load',
           timeout: 5000,
         });
 
@@ -858,7 +869,7 @@ export async function extractPageCSS(port: number, route: string): Promise<strin
   const url = `http://localhost:${port}${route}`;
 
   try {
-    await page.goto(url, { waitUntil: 'networkidle' });
+    await page.goto(url, { waitUntil: 'load', timeout: 15000 });
 
     const cssTexts = await page.evaluate(() => {
       const results: string[] = [];

@@ -19,8 +19,8 @@ import {
 
 import { capturePage, closeBrowser } from './capture.js';
 import { diffPages } from './diff.js';
-import { discoverRoutes, detectLocales, validateLocaleLinks } from './routes.js';
-import { detectBreakpoints } from './viewports.js';
+// Route discovery + breakpoint detection are Phase 2 concerns (ir_capture).
+// ir_start uses the route the agent provides — no crawling needed.
 import {
   startWatch,
   stopWatch,
@@ -382,33 +382,40 @@ function createServer(): Server {
           // Background: discover, capture, diff, start watch
           (async () => {
             try {
-              // Discover routes and breakpoints
-              try {
-                const routes = await discoverRoutes(legacyPort);
-                discoveredRoutes = routes.map((r) => r.path);
-                detectedViewports = await detectBreakpoints(legacyPort, legacyRoute);
-                localeConfig = detectLocales(routes);
-              } catch {
-                discoveredRoutes = [legacyRoute];
-                detectedViewports = [1280];
-                localeConfig = null;
-              }
+              const t0 = Date.now();
+              const log = (msg: string) => console.error(`[migent:init] ${msg} (${Date.now() - t0}ms)`);
 
-              // Capture initial state
+              // Skip heavy route discovery — agent provides the route explicitly.
+              // Discovery belongs in Phase 2 (ir_capture), not in the watch loop.
+              discoveredRoutes = [legacyRoute];
+              detectedViewports = [1280];
+              localeConfig = null;
+              log('Using provided route, skipping discovery');
+
+              // Capture both sites in parallel
+              log('Capturing both sites...');
               const viewport = { width: detectedViewports[0] || 1280, height: 800 };
-              legacyPageIR = await capturePage(legacyPort, legacyRoute, viewport);
-              nextPageIR = await capturePage(nextPort, nextRoute, viewport);
+              [legacyPageIR, nextPageIR] = await Promise.all([
+                capturePage(legacyPort, legacyRoute, viewport),
+                capturePage(nextPort, nextRoute, viewport),
+              ]);
+              log(`Captures done: legacy=${legacyPageIR.elements.length} next=${nextPageIR.elements.length} elements`);
 
               // Run initial diff
               lastDiff = diffPages(legacyPageIR, nextPageIR);
+              log(`Diff done: ${lastDiff.issues.length} issues, ${lastDiff.match.overall}% match`);
 
-              // Start watch mode
+              // Mark ready BEFORE starting watch (startWatch runs indefinitely)
+              initStatus = 'ready';
+
+              // Start watch mode — fire and forget (pass initialDiff to avoid double capture)
               startWatch({
                 legacyPort,
                 nextPort,
                 legacyRoute,
                 nextRoute,
                 watchPaths: defaultWatchPaths,
+                initialDiff: lastDiff,
                 onDiff: (diff) => {
                   lastDiff = diff;
                 },
@@ -417,11 +424,11 @@ function createServer(): Server {
                 },
               }).catch((err) => console.error('Watch startup failed:', err));
 
-              initStatus = 'ready';
+              log('Watch mode started');
             } catch (err) {
               initStatus = 'error';
               initError = err instanceof Error ? err.message : String(err);
-              console.error('ir_start background init failed:', initError);
+              console.error(`[migent:init] FAILED: ${initError}`);
             }
           })();
 
@@ -433,6 +440,17 @@ function createServer(): Server {
 
         // ── ir_next ───────────────────────────────────────────────────
         case 'ir_next': {
+          // Still initializing — tell agent to wait
+          if (initStatus === 'initializing') {
+            return reply({
+              status: 'initializing',
+              message: 'Still capturing sites. Poll ir_status to check when ready.',
+            });
+          }
+          if (initStatus === 'error') {
+            return errorReply(`Initialization failed: ${initError}`);
+          }
+
           const a = args as Record<string, unknown>;
           const skip = a.skip === true;
 

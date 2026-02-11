@@ -20,6 +20,8 @@ interface WatchConfig {
   nextRoute: string;
   watchPaths: string[];
   viewports?: number[];
+  /** If provided, skip the initial capture+diff and use this instead */
+  initialDiff?: DiffResult;
   onDiff?: (diff: DiffResult, iteration: number) => void;
   onStatusChange?: (status: WatchStatus) => void;
   onRegressionDetected?: (count: number) => void;
@@ -239,27 +241,35 @@ export async function startWatch(config: WatchConfig): Promise<void> {
   console.log(`   Watching: ${config.watchPaths.join(', ')}`);
   console.log('');
 
-  // Run initial diff
+  // Run initial diff (or use pre-computed one)
   state.iteration++;
-  console.log('📸 Running initial diff...');
 
-  try {
-    state.lastDiff = await runDiff(config);
+  if (config.initialDiff) {
+    console.log('📸 Using pre-computed initial diff...');
+    state.lastDiff = config.initialDiff;
     state.previousIssueCount = state.lastDiff.issues.length;
     config.onDiff?.(state.lastDiff, state.iteration);
     console.log(formatDiffSummary(state.lastDiff));
-
-    // Check if already complete
-    if (state.lastDiff.match.overall === 100) {
-      console.log('\n🎉 Already a perfect match!\n');
-      config.onComplete?.();
+  } else {
+    console.log('📸 Running initial diff...');
+    try {
+      state.lastDiff = await runDiff(config);
+      state.previousIssueCount = state.lastDiff.issues.length;
+      config.onDiff?.(state.lastDiff, state.iteration);
+      console.log(formatDiffSummary(state.lastDiff));
+    } catch (error) {
+      console.error('❌ Error running initial diff:', error);
+      setStatus('error');
+      state.error = error instanceof Error ? error.message : String(error);
+      config.onError?.(error instanceof Error ? error : new Error(String(error)));
       return;
     }
-  } catch (error) {
-    console.error('❌ Error running initial diff:', error);
-    setStatus('error');
-    state.error = error instanceof Error ? error.message : String(error);
-    config.onError?.(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  // Check if already complete
+  if (state.lastDiff.match.overall === 100) {
+    console.log('\n🎉 Already a perfect match!\n');
+    config.onComplete?.();
     return;
   }
 
