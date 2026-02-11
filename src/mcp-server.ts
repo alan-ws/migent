@@ -19,7 +19,7 @@ import {
 
 import { capturePage, closeBrowser } from './capture.js';
 import { diffPages } from './diff.js';
-import { discoverRoutes } from './routes.js';
+import { discoverRoutes, detectLocales, validateLocaleLinks } from './routes.js';
 import { detectBreakpoints } from './viewports.js';
 import {
   startWatch,
@@ -32,7 +32,7 @@ import {
   formatDiffForMCP,
 } from './watch.js';
 import { findElementByPosition, findElementByText } from './matcher.js';
-import type { PageIR, DiffResult, ElementIR } from './types.js';
+import type { PageIR, DiffResult, ElementIR, LocaleConfig } from './types.js';
 
 // In-memory stores
 let legacyPageIR: PageIR | null = null;
@@ -40,6 +40,7 @@ let nextPageIR: PageIR | null = null;
 let lastDiff: DiffResult | null = null;
 let discoveredRoutes: string[] = [];
 let detectedViewports: number[] = [];
+let localeConfig: LocaleConfig | null = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -305,6 +306,32 @@ function createServer(): Server {
               }
             : null;
 
+          // Font data for next/font setup
+          const fonts = pageIR.fonts
+            ? {
+                totalFontFaces: pageIR.fonts.length,
+                fontFaces: pageIR.fonts.slice(0, 20),
+                uniqueFamilies: [...new Set(pageIR.fonts.map((f) => f.family))],
+              }
+            : null;
+
+          // UI patterns for shadcn component mapping
+          const uiPatterns = pageIR.uiPatterns
+            ? {
+                totalPatterns: pageIR.uiPatterns.reduce((sum, p) => sum + p.count, 0),
+                patterns: pageIR.uiPatterns,
+                shadcnComponentsNeeded: pageIR.uiPatterns.map((p) => p.shadcnComponent),
+              }
+            : null;
+
+          // Internal links for route validation
+          const internalLinks = pageIR.internalLinks
+            ? {
+                total: pageIR.internalLinks.length,
+                links: pageIR.internalLinks.slice(0, 50),
+              }
+            : null;
+
           return reply({
             url: pageIR.url,
             title: pageIR.meta.title,
@@ -315,6 +342,10 @@ function createServer(): Server {
             topLevelElements,
             animations,
             cls,
+            fonts,
+            uiPatterns,
+            redirects: pageIR.redirects || null,
+            internalLinks,
           });
         }
 
@@ -335,11 +366,14 @@ function createServer(): Server {
 
           // Discover routes and breakpoints
           try {
-            discoveredRoutes = (await discoverRoutes(legacyPort)).map((r) => r.path);
+            const routes = await discoverRoutes(legacyPort);
+            discoveredRoutes = routes.map((r) => r.path);
             detectedViewports = await detectBreakpoints(legacyPort, legacyRoute);
+            localeConfig = detectLocales(routes);
           } catch {
             discoveredRoutes = [legacyRoute];
             detectedViewports = [1280];
+            localeConfig = null;
           }
 
           const defaultWatchPaths = watchPaths || [
@@ -378,6 +412,7 @@ function createServer(): Server {
             message: `Watch mode started. ${lastDiff.issues.length} issues found.`,
             routes: discoveredRoutes.slice(0, 10),
             viewports: detectedViewports,
+            localeConfig: localeConfig && localeConfig.detected ? localeConfig : undefined,
             match: lastDiff.match,
             totalIssues: lastDiff.issues.length,
             firstIssue: firstIssue ? formatIssue(firstIssue) : null,
