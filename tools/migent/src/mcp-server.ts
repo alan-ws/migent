@@ -41,6 +41,8 @@ let lastDiff: DiffResult | null = null;
 let discoveredRoutes: string[] = [];
 let detectedViewports: number[] = [];
 let localeConfig: LocaleConfig | null = null;
+let initStatus: 'idle' | 'initializing' | 'ready' | 'error' = 'idle';
+let initError: string | null = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -140,7 +142,7 @@ function createServer(): Server {
         {
           name: 'ir_start',
           description:
-            'Start migration watch mode. Captures both sites, diffs them, watches for file changes. Returns first issue to fix.',
+            'Start migration watch mode (non-blocking). Returns immediately while capturing both sites in the background. Poll ir_status until status is "watching".',
           inputSchema: {
             type: 'object',
             properties: {
@@ -175,7 +177,7 @@ function createServer(): Server {
         {
           name: 'ir_status',
           description:
-            'Migration progress: match percentages, issue counts by severity, CLS score, regression state.',
+            'Migration progress. During init: reports "initializing" until ready. After: match percentages, issue counts, CLS score, regression state, routes, viewports.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -358,23 +360,18 @@ function createServer(): Server {
           const nextRoute = typeof a.nextRoute === 'string' ? a.nextRoute : '/';
           const watchPaths = Array.isArray(a.watchPaths) ? (a.watchPaths as string[]) : undefined;
 
-          if (isWatching()) {
+          if (isWatching() || initStatus === 'initializing') {
             return reply({
-              error: 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
+              status: initStatus === 'initializing' ? 'initializing' : 'watching',
+              message: initStatus === 'initializing'
+                ? 'Already initializing. Poll ir_status to check when ready.'
+                : 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
             });
           }
 
-          // Discover routes and breakpoints
-          try {
-            const routes = await discoverRoutes(legacyPort);
-            discoveredRoutes = routes.map((r) => r.path);
-            detectedViewports = await detectBreakpoints(legacyPort, legacyRoute);
-            localeConfig = detectLocales(routes);
-          } catch {
-            discoveredRoutes = [legacyRoute];
-            detectedViewports = [1280];
-            localeConfig = null;
-          }
+          // Return immediately, do heavy work in background
+          initStatus = 'initializing';
+          initError = null;
 
           const defaultWatchPaths = watchPaths || [
             process.cwd() + '/components',
@@ -382,40 +379,55 @@ function createServer(): Server {
             process.cwd() + '/src',
           ];
 
-          // Capture initial state
-          const viewport = { width: detectedViewports[0] || 1280, height: 800 };
-          legacyPageIR = await capturePage(legacyPort, legacyRoute, viewport);
-          nextPageIR = await capturePage(nextPort, nextRoute, viewport);
+          // Background: discover, capture, diff, start watch
+          (async () => {
+            try {
+              // Discover routes and breakpoints
+              try {
+                const routes = await discoverRoutes(legacyPort);
+                discoveredRoutes = routes.map((r) => r.path);
+                detectedViewports = await detectBreakpoints(legacyPort, legacyRoute);
+                localeConfig = detectLocales(routes);
+              } catch {
+                discoveredRoutes = [legacyRoute];
+                detectedViewports = [1280];
+                localeConfig = null;
+              }
 
-          // Run initial diff
-          lastDiff = diffPages(legacyPageIR, nextPageIR);
+              // Capture initial state
+              const viewport = { width: detectedViewports[0] || 1280, height: 800 };
+              legacyPageIR = await capturePage(legacyPort, legacyRoute, viewport);
+              nextPageIR = await capturePage(nextPort, nextRoute, viewport);
 
-          // Start watch mode (non-blocking, log errors)
-          startWatch({
-            legacyPort,
-            nextPort,
-            legacyRoute,
-            nextRoute,
-            watchPaths: defaultWatchPaths,
-            onDiff: (diff) => {
-              lastDiff = diff;
-            },
-            onError: (err) => {
-              console.error('Watch error:', err.message);
-            },
-          }).catch((err) => console.error('Watch startup failed:', err));
+              // Run initial diff
+              lastDiff = diffPages(legacyPageIR, nextPageIR);
 
-          const firstIssue = lastDiff.issues[0] || null;
+              // Start watch mode
+              startWatch({
+                legacyPort,
+                nextPort,
+                legacyRoute,
+                nextRoute,
+                watchPaths: defaultWatchPaths,
+                onDiff: (diff) => {
+                  lastDiff = diff;
+                },
+                onError: (err) => {
+                  console.error('Watch error:', err.message);
+                },
+              }).catch((err) => console.error('Watch startup failed:', err));
+
+              initStatus = 'ready';
+            } catch (err) {
+              initStatus = 'error';
+              initError = err instanceof Error ? err.message : String(err);
+              console.error('ir_start background init failed:', initError);
+            }
+          })();
 
           return reply({
-            success: true,
-            message: `Watch mode started. ${lastDiff.issues.length} issues found.`,
-            routes: discoveredRoutes.slice(0, 10),
-            viewports: detectedViewports,
-            localeConfig: localeConfig && localeConfig.detected ? localeConfig : undefined,
-            match: lastDiff.match,
-            totalIssues: lastDiff.issues.length,
-            firstIssue: firstIssue ? formatIssue(firstIssue) : null,
+            status: 'initializing',
+            message: 'Capturing sites and running initial diff. Poll ir_status to check when ready.',
           });
         }
 
@@ -500,6 +512,14 @@ function createServer(): Server {
 
         // ── ir_status ─────────────────────────────────────────────────
         case 'ir_status': {
+          // Handle initializing state
+          if (initStatus === 'initializing') {
+            return reply({ status: 'initializing', message: 'Capturing sites and running initial diff...' });
+          }
+          if (initStatus === 'error') {
+            return reply({ status: 'error', message: `Initialization failed: ${initError}` });
+          }
+
           const state = getWatchState();
 
           if (!state.lastDiff) {
@@ -510,7 +530,7 @@ function createServer(): Server {
           const major = state.lastDiff.issues.filter((i) => i.severity === 'major').length;
           const minor = state.lastDiff.issues.length - critical - major;
 
-          return reply({
+          const statusReply: Record<string, unknown> = {
             status: state.status,
             iteration: state.iteration,
             match: state.lastDiff.match,
@@ -521,7 +541,20 @@ function createServer(): Server {
             clsScore: state.lastDiff.cls?.next?.score ?? null,
             clsRating: state.lastDiff.cls?.next?.rating ?? null,
             stats: state.lastDiff.stats,
-          });
+          };
+
+          // On first ready report, include discovery data the agent needs
+          if (initStatus === 'ready') {
+            statusReply.routes = discoveredRoutes.slice(0, 10);
+            statusReply.viewports = detectedViewports;
+            if (localeConfig && localeConfig.detected) {
+              statusReply.localeConfig = localeConfig;
+            }
+            const firstIssue = state.lastDiff.issues[0] || null;
+            statusReply.firstIssue = firstIssue ? formatIssue(firstIssue) : null;
+          }
+
+          return reply(statusReply);
         }
 
         // ── ir_inspect (merged ir_element + ir_compare) ──────────────
@@ -598,6 +631,8 @@ function createServer(): Server {
         case 'ir_stop': {
           stopWatch();
           await closeBrowser();
+          initStatus = 'idle';
+          initError = null;
           return reply({ success: true, message: 'Watch mode stopped.' });
         }
 

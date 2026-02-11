@@ -1,5 +1,5 @@
 ---
-name: migration
+name: migrate-to-nextjs
 description: Autonomous site migration from any legacy stack to modern Next.js. Visual diffing, best practices enforcement, live progress on localhost.
 user-invocable: true
 ---
@@ -390,9 +390,17 @@ Fix any violations before proceeding.
 
 ### 3.3 Visual Validation Loop
 
-Start watch mode:
+Start watch mode (returns immediately — captures run in background):
 ```
 ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
+→ { status: "initializing" }
+```
+
+Poll until ready:
+```
+ir_status()
+→ While initializing: { status: "initializing" }
+→ When ready: { status: "watching", match: {...}, firstIssue: {...}, routes: [...] }
 ```
 
 Loop until match >= 95%:
@@ -817,11 +825,11 @@ Deterministic capture sequence:
 - **Internal links** (`internalLinks`): { total, links[] } — for route validation
 
 ### ir_start
-Start migration watch mode. Captures both sites, diffs, watches for file changes.
+Start migration watch mode (**non-blocking** — returns immediately).
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
-Returns: Initial diff, first issue, and `localeConfig` (if locales detected in routes).
+Returns: `{ status: "initializing" }`. Captures both sites, diffs, and starts file watcher in the background. Poll `ir_status` until status changes to `"watching"`.
 
 ### ir_next
 Get next issue to fix. Blocks on CLS gate and regressions.
@@ -832,7 +840,7 @@ ir_next(skip?: boolean)
 - Returns: Issue with selector, position, styles, and fix suggestion.
 
 ### ir_status
-Get migration progress: match percentages, issue counts by severity, CLS score, regression state.
+Migration progress. During init: `{ status: "initializing" }`. After ready: match percentages, issue counts by severity, CLS score, regression state, discovered routes, viewports, localeConfig, firstIssue.
 
 ### ir_inspect
 Inspect element by selector or text.
