@@ -1,6 +1,6 @@
 {
   "name": "migent",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "Autonomous site migration agent - visual diff tool for legacy to Next.js migrations",
   "type": "module",
   "bin": {
@@ -49,14 +49,14 @@
     "url": "https://github.com/alan-ws/migent/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "playwright": "^1.40.0"
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "playwright": "^1.58.2"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "typescript": "^5.7.0"
   }
 }
