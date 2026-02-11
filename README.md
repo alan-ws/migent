@@ -1,106 +1,91 @@
-# Migent
+# migent
 
-Autonomous site migration tool that helps coding agents achieve visual match between legacy and Next.js sites.
+Agentic tools and skills for autonomous site migration to Next.js.
 
-## What It Does
+Works with **Claude Code** and **Codex CLI** — any agent that supports [MCP](https://modelcontextprotocol.io) and [SKILL.md](https://skills.sh).
 
-Migent runs as an MCP server that provides tools for coding agents (Claude Code) to autonomously migrate websites. It captures pages with Playwright, matches elements by visual position, diffs computed styles, and feeds issues one at a time through an iterative fix loop with regression blocking and CLS gates.
+## Structure
 
-## Installation
+```
+skills/
+  migrate-to-nextjs/    SKILL.md — autonomous migration skill
+tools/
+  migent/               MCP server + CLI for visual diffing
+```
+
+## Quick Start
+
+### 1. Install the MCP server
 
 ```bash
 npm install -g migent
 ```
 
-## MCP Configuration
+### 2. Configure MCP
 
-Add to `.mcp.json` in your workspace root:
-
+**Claude Code** — add to `.mcp.json`:
 ```json
 {
   "mcpServers": {
     "migent": {
       "command": "npx",
       "args": ["-y", "migent", "mcp"]
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
     }
   }
 }
 ```
 
+**Codex CLI:**
+```bash
+codex mcp add migent -- npx -y migent mcp
+codex mcp add shadcn -- npx shadcn@latest mcp
+```
+
+### 3. Install the skill
+
+```bash
+npx skills add https://github.com/vercel-labs/agentic-migrations --skill migrate-to-nextjs --yes
+```
+
+### 4. Run
+
+```
+/migrate-to-nextjs
+```
+
+The agent handles everything: captures the legacy site, creates the Next.js project, iteratively diffs and fixes until 95%+ visual match.
+
 ## MCP Tools
 
 | Tool | Description |
-|------|-------------|
-| `ir_capture` | Capture a page's DOM, computed styles, animations, and CLS score |
-| `ir_start` | Start watch mode — captures both sites, diffs, watches for file changes |
-| `ir_next` | Get next issue to fix (blocks on CLS gate and regressions) |
-| `ir_status` | Migration progress: match %, issue counts, CLS score |
-| `ir_inspect` | Inspect element: one side or side-by-side diff |
-| `ir_stop` | Stop watch mode and close browser |
-
-## Agent Flow
-
-```
-Agent: ir_start(legacyPort: 8000, nextPort: 3000)
-Tool:  "47 issues found. Here's issue #1: ..."
-
-Agent: [edits component file, saves]
-Tool:  [detects change, waits for rebuild, re-captures, re-diffs]
-
-Agent: ir_next()
-Tool:  "46 issues remain. Issue #2: ..."
-
-... repeat until match >= 95% ...
-
-Agent: ir_next(skip: true)   ← skip stubborn issues after 3 attempts
-Agent: ir_status()           ← confirm match % and CLS rating
-Agent: ir_stop()
-```
-
-### Gates
-
-- **CLS Gate** — `ir_next` refuses to serve style issues until CLS score is "good" (<= 0.1)
-- **Regression Gate** — `ir_next` blocks if new issues were introduced by the last edit
+|---|---|
+| `ir_capture` | Capture DOM tree, styles, animations, CLS, fonts, UI patterns |
+| `ir_start` | Start watch mode — diff + file watcher + regression gate |
+| `ir_next` | Next issue to fix (blocks on CLS gate and regressions) |
+| `ir_status` | Match percentages, issue counts, CLS score |
+| `ir_inspect` | Deep-dive or side-by-side element comparison |
+| `ir_stop` | Stop watch mode |
 
 ## How It Works
 
-1. **Capture** — Playwright captures both sites with deterministic sequencing (network idle, lazy images, font loading, animation force-finish, DOM stability wait)
-2. **Match** — Elements paired by visual position (bounding box IoU), text content, and semantic role
-3. **Diff** — Matched pairs compared for style differences across 60 computed CSS properties
-4. **Iterate** — Issues served one at a time; file watcher triggers re-diff on save
+1. **Capture** — Playwright captures both sites with deterministic sequencing (network idle, lazy images, fonts, animations forced to end state, DOM stability)
+2. **Diff** — Position-based element matching (IoU bounding boxes), computed style comparison
+3. **Watch** — File watcher triggers re-capture on save, regression detection blocks if issues increase
+4. **Gates** — CLS must be "good" (<=0.1) before style issues are served. Regressions block until fixed.
+5. **Iterate** — Agent fixes one issue at a time until match >= 95%
 
-### Position-Based Matching
+## Enforcement
 
-Unlike selector-based tools, Migent matches by **visual output**:
-
-```
-Legacy: <div id="hero"> at (0, 0, 1280, 600)
-Next:   <section className="..."> at (0, 0, 1280, 600)
-
-→ MATCHED by position
-→ Compare computed styles
-→ Report differences
-```
-
-This allows full modernisation (Tailwind, semantic HTML, new component structure) while ensuring visual fidelity.
-
-## CLI
-
-The CLI is a thin launcher for the MCP server:
-
-```bash
-migent mcp          # Start MCP server (stdio)
-migent --version    # Print version
-migent --help       # Show help
-```
-
-## Development
-
-```bash
-npm install
-npx playwright install chromium
-npm run build
-```
+The skill enforces modern best practices:
+- **Tailwind CSS** — all styles via utilities, no legacy class names or inline styles
+- **shadcn/ui** — all form elements, dialogs, tables via shadcn components
+- **next/font** — no raw `@font-face`, must use `next/font/google` or `next/font/local`
+- **next/image** — all images via `next/image` with explicit dimensions
+- **Server Components** — default, `'use client'` only when needed
 
 ## License
 

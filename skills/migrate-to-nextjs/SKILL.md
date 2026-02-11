@@ -143,15 +143,16 @@ ls src/components/ui/
 
 ### 1.9 Configure MCP
 
-Create `.mcp.json` in the **workspace root** (NOT inside the Next.js project):
+Configure MCP servers in the **workspace root** (NOT inside the Next.js project):
 
 ```
-workspace/              ← .mcp.json goes HERE
+workspace/              ← config goes HERE
 ├── legacy-site/
 ├── my-next-app/
-└── .mcp.json
+└── .mcp.json / .codex/config.toml
 ```
 
+**Claude Code** — create `.mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -165,6 +166,12 @@ workspace/              ← .mcp.json goes HERE
     }
   }
 }
+```
+
+**Codex CLI** — run:
+```bash
+codex mcp add migent -- npx -y migent mcp
+codex mcp add shadcn -- npx shadcn@latest mcp
 ```
 
 The **shadcn MCP** lets you browse, search, and install components via natural language. Use it to install components detected by `ir_capture` uiPatterns and to find blocks/templates that match legacy page structures.

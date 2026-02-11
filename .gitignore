@@ -10,6 +10,7 @@ dist/
 
 # OS
 .DS_Store
+Thumbs.db
 
 # Logs
 *.log
@@ -19,7 +20,6 @@ npm-debug.log*
 *.tsbuildinfo
 
 # IDE
-.claude/
 .idea/
 .vscode/
 *.swp
@@ -28,5 +28,5 @@ npm-debug.log*
 # Test
 coverage/
 
-# Internal/temp
+# Runtime cache (migent capture output)
 .ir/
