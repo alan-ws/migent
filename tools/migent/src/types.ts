@@ -462,6 +462,7 @@ export interface DiscoveredRoute {
 
 export type WatchStatus =
   | 'idle'
+  | 'initializing'
   | 'watching'
   | 'file-changed'
   | 'waiting-rebuild'

@@ -19,8 +19,6 @@ import {
 
 import { capturePage, closeBrowser } from './capture.js';
 import { diffPages } from './diff.js';
-import { discoverRoutes, detectLocales, validateLocaleLinks } from './routes.js';
-import { detectBreakpoints } from './viewports.js';
 import {
   startWatch,
   stopWatch,
@@ -29,24 +27,20 @@ import {
   getNextIssue,
   advanceIssue,
   getRemainingIssueCount,
-  formatDiffForMCP,
 } from './watch.js';
 import { findElementByPosition, findElementByText } from './matcher.js';
-import type { PageIR, DiffResult, ElementIR, LocaleConfig } from './types.js';
+import type { PageIR, DiffResult, ElementIR } from './types.js';
 
 // In-memory stores
 let legacyPageIR: PageIR | null = null;
 let nextPageIR: PageIR | null = null;
 let lastDiff: DiffResult | null = null;
-let discoveredRoutes: string[] = [];
-let detectedViewports: number[] = [];
-let localeConfig: LocaleConfig | null = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function reply(data: object) {
   return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+    content: [{ type: 'text' as const, text: JSON.stringify(data) }],
   };
 }
 
@@ -114,7 +108,7 @@ function findElement(pageIR: PageIR, selector: string): ElementIR | undefined {
 
 function createServer(): Server {
   const server = new Server(
-    { name: 'migent', version: '2.1.0' },
+    { name: 'migent', version: '3.2.0' },
     { capabilities: { tools: {} } }
   );
 
@@ -140,7 +134,7 @@ function createServer(): Server {
         {
           name: 'ir_start',
           description:
-            'Start migration watch mode. Captures both sites, diffs them, watches for file changes. Returns first issue to fix.',
+            'Start migration watch mode. Captures both sites, diffs, starts file watcher, returns first issue.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -255,10 +249,10 @@ function createServer(): Server {
           // Store for later inspect
           legacyPageIR = pageIR;
 
-          // Top-level elements (cap at 20)
+          // Top-level elements for understanding page structure
           const topLevelElements = pageIR.elements
             .filter((el) => !el.selector.includes(' > ') || el.selector.split(' > ').length <= 2)
-            .slice(0, 20)
+            .slice(0, 30)
             .map((el) => ({
               tag: el.tag,
               selector: el.selector,
@@ -271,20 +265,20 @@ function createServer(): Server {
               },
             }));
 
-          // Animations — show counts + capped sample; diff loop catches the rest
+          // Animation data for recreating in Next.js
           const animations = pageIR.animations
             ? {
                 keyframeCount: pageIR.animations.keyframes.length,
                 keyframes: pageIR.animations.keyframes.slice(0, 10),
                 animatedElementCount: pageIR.animations.animatedElements.length,
-                animatedElements: pageIR.animations.animatedElements.slice(0, 10),
+                animatedElements: pageIR.animations.animatedElements.slice(0, 20),
                 transitionElementCount: pageIR.animations.transitionElements.length,
-                transitionElements: pageIR.animations.transitionElements.slice(0, 10),
+                transitionElements: pageIR.animations.transitionElements.slice(0, 20),
                 jQueryAnimations: pageIR.animations.jQueryAnimations,
               }
             : null;
 
-          // CLS (top 3 shifters)
+          // CLS (top 5 shifters)
           const cls = pageIR.cls
             ? {
                 score: pageIR.cls.score,
@@ -292,7 +286,7 @@ function createServer(): Server {
                 shiftCount: pageIR.cls.shifts.length,
                 topShifters: pageIR.cls.shifts
                   .sort((a, b) => b.value - a.value)
-                  .slice(0, 3)
+                  .slice(0, 5)
                   .map((s) => ({
                     value: s.value,
                     elements: s.sources.map((src) => ({
@@ -346,6 +340,7 @@ function createServer(): Server {
             uiPatterns,
             redirects: pageIR.redirects || null,
             internalLinks,
+            message: 'Use ir_inspect(selector, site: "legacy") for full element styles. Animation data includes @keyframes, durations, easing for recreation.',
           });
         }
 
@@ -360,20 +355,9 @@ function createServer(): Server {
 
           if (isWatching()) {
             return reply({
-              error: 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
+              status: 'watching',
+              message: 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
             });
-          }
-
-          // Discover routes and breakpoints
-          try {
-            const routes = await discoverRoutes(legacyPort);
-            discoveredRoutes = routes.map((r) => r.path);
-            detectedViewports = await detectBreakpoints(legacyPort, legacyRoute);
-            localeConfig = detectLocales(routes);
-          } catch {
-            discoveredRoutes = [legacyRoute];
-            detectedViewports = [1280];
-            localeConfig = null;
           }
 
           const defaultWatchPaths = watchPaths || [
@@ -382,37 +366,35 @@ function createServer(): Server {
             process.cwd() + '/src',
           ];
 
-          // Capture initial state
-          const viewport = { width: detectedViewports[0] || 1280, height: 800 };
-          legacyPageIR = await capturePage(legacyPort, legacyRoute, viewport);
-          nextPageIR = await capturePage(nextPort, nextRoute, viewport);
+          // Capture both sites in parallel (lite — no fonts/UI patterns/links)
+          const viewport = { width: 1280, height: 800 };
+          [legacyPageIR, nextPageIR] = await Promise.all([
+            capturePage(legacyPort, legacyRoute, viewport, { lite: true }),
+            capturePage(nextPort, nextRoute, viewport, { lite: true }),
+          ]);
 
           // Run initial diff
           lastDiff = diffPages(legacyPageIR, nextPageIR);
 
-          // Start watch mode (non-blocking, log errors)
+          // Start watch mode (pass initialDiff to avoid double capture)
           startWatch({
             legacyPort,
             nextPort,
             legacyRoute,
             nextRoute,
             watchPaths: defaultWatchPaths,
+            initialDiff: lastDiff,
             onDiff: (diff) => {
               lastDiff = diff;
             },
-            onError: (err) => {
-              console.error('Watch error:', err.message);
-            },
-          }).catch((err) => console.error('Watch startup failed:', err));
+          }).catch(console.error);
 
+          // Return first issue immediately
           const firstIssue = lastDiff.issues[0] || null;
 
           return reply({
-            success: true,
+            status: 'watching',
             message: `Watch mode started. ${lastDiff.issues.length} issues found.`,
-            routes: discoveredRoutes.slice(0, 10),
-            viewports: detectedViewports,
-            localeConfig: localeConfig && localeConfig.detected ? localeConfig : undefined,
             match: lastDiff.match,
             totalIssues: lastDiff.issues.length,
             firstIssue: firstIssue ? formatIssue(firstIssue) : null,
@@ -510,7 +492,7 @@ function createServer(): Server {
           const major = state.lastDiff.issues.filter((i) => i.severity === 'major').length;
           const minor = state.lastDiff.issues.length - critical - major;
 
-          return reply({
+          const statusReply: Record<string, unknown> = {
             status: state.status,
             iteration: state.iteration,
             match: state.lastDiff.match,
@@ -521,7 +503,9 @@ function createServer(): Server {
             clsScore: state.lastDiff.cls?.next?.score ?? null,
             clsRating: state.lastDiff.cls?.next?.rating ?? null,
             stats: state.lastDiff.stats,
-          });
+          };
+
+          return reply(statusReply);
         }
 
         // ── ir_inspect (merged ir_element + ir_compare) ──────────────
@@ -616,6 +600,10 @@ function createServer(): Server {
  * Start the MCP server
  */
 async function main() {
+  // MCP uses stdout for JSON-RPC — redirect console.log to stderr
+  // so watch.ts/capture.ts debug output doesn't corrupt the protocol
+  console.log = console.error;
+
   const server = createServer();
   const transport = new StdioServerTransport();
 

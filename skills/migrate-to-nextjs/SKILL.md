@@ -1,5 +1,5 @@
 ---
-name: migration
+name: migrate-to-nextjs
 description: Autonomous site migration from any legacy stack to modern Next.js. Visual diffing, best practices enforcement, live progress on localhost.
 user-invocable: true
 ---
@@ -70,7 +70,7 @@ Load all skill contexts now. They will be used throughout the migration.
 /web-design-guidelines
 ```
 
-**IMPORTANT**: Always use the latest Next.js (check version). Styles need latest tailwindcss and include shadcn (check versions).
+**IMPORTANT**: Always use the latest Next.js and tailwindcss (check versions).
 
 ### 1.6 Create Next.js Project
 
@@ -114,34 +114,7 @@ Create `biome.json`:
 }
 ```
 
-### 1.8 Install shadcn/ui
-
-**REQUIRED for all migrations.** shadcn provides accessible, production-ready components.
-
-```bash
-cd <project-name>
-bunx shadcn@latest init -y
-```
-
-Install base components that most sites need:
-```bash
-bunx shadcn@latest add button input textarea select card -y
-```
-
-After running `ir_capture` in Phase 2, install additional components based on detected UI patterns:
-```bash
-# Example: if ir_capture shows uiPatterns with Dialog, Table, NavigationMenu
-bunx shadcn@latest add dialog table navigation-menu -y
-```
-
-**VERIFY**:
-```bash
-ls components.json
-ls src/components/ui/
-```
-**MUST PASS**: `components.json` exists and `src/components/ui/` contains component files.
-
-### 1.9 Configure MCP
+### 1.8 Configure MCP
 
 Configure MCP servers in the **workspace root** (NOT inside the Next.js project):
 
@@ -149,34 +122,22 @@ Configure MCP servers in the **workspace root** (NOT inside the Next.js project)
 workspace/              ← config goes HERE
 ├── legacy-site/
 ├── my-next-app/
-└── .mcp.json / .codex/config.toml
+└── .mcp.json
 ```
 
-**Claude Code** — create `.mcp.json`:
+Create `.mcp.json`:
 ```json
 {
   "mcpServers": {
     "migent": {
       "command": "npx",
       "args": ["-y", "migent", "mcp"]
-    },
-    "shadcn": {
-      "command": "npx",
-      "args": ["shadcn@latest", "mcp"]
     }
   }
 }
 ```
 
-**Codex CLI** — run:
-```bash
-codex mcp add migent -- npx -y migent mcp
-codex mcp add shadcn -- npx shadcn@latest mcp
-```
-
-The **shadcn MCP** lets you browse, search, and install components via natural language. Use it to install components detected by `ir_capture` uiPatterns and to find blocks/templates that match legacy page structures.
-
-### 1.10 Verify MCP
+### 1.9 Verify MCP
 
 Start the Next.js dev server, then test MCP:
 
@@ -190,7 +151,7 @@ ir_capture(port: 3000, route: "/")
 
 **VERIFY**: Returns JSON with `elementCount > 0`.
 
-### 1.11 Copy Assets
+### 1.10 Copy Assets
 
 ```bash
 mkdir -p <next-project>/public
@@ -205,7 +166,6 @@ Before proceeding, confirm ALL of the following:
 - [ ] All 4 skills installed
 - [ ] Legacy site running and accessible
 - [ ] Next.js project created with Biome configured
-- [ ] shadcn/ui initialized with base components
 - [ ] MCP returning captures for both sites
 - [ ] Assets copied
 
@@ -224,14 +184,19 @@ Analyze legacy codebase to find all routes:
 - Check router files (Express routes, Next.js pages, PHP files)
 - Check navigation links in captured IR
 
-### 2.2 Capture All Routes
+### 2.2 Capture All Routes (Parallel)
 
-For EACH discovered route:
+Call `ir_capture` for all discovered routes **in parallel** (batch all calls in a single message). Each `ir_capture` creates a fresh Playwright page — no shared state conflicts.
+
 ```
-ir_capture(port: <legacy-port>, route: "<route>")
+# Call all in one message — they run concurrently:
+ir_capture(port: <legacy-port>, route: "/")
+ir_capture(port: <legacy-port>, route: "/about")
+ir_capture(port: <legacy-port>, route: "/contact")
+# ... all discovered routes
 ```
 
-Save results to `migration.json`:
+Collect all results. Write captures to `migration.json`:
 ```json
 {
   "legacy": {
@@ -247,6 +212,11 @@ Save results to `migration.json`:
   "next": {
     "directory": "./my-next-app",
     "port": 3000
+  },
+  "routeStatus": {
+    "/": "pending",
+    "/about": "pending",
+    "/contact": "pending"
   },
   "progress": {},
   "skippedIssues": []
@@ -274,7 +244,7 @@ Document findings in `migration.json` under `legacy.javascript`.
 Check `ir_capture` results for locale patterns:
 
 1. **Redirect-based detection**: If `ir_capture` returns `redirects` (e.g., `/` → `/en/`), the site uses locale prefixes.
-2. **Route-based detection**: If discovered routes have locale prefixes (e.g., `/en/about`, `/fr/about`), locales are in use. `ir_start` will confirm via `localeConfig` in Phase 3.
+2. **Route-based detection**: If discovered routes have locale prefixes (e.g., `/en/about`, `/fr/about`), locales are in use.
 
 **If locales are detected:**
 - Set up Next.js i18n middleware for locale routing
@@ -285,24 +255,7 @@ Check `ir_capture` results for locale patterns:
 
 **Internal link validation**: Check `ir_capture` `internalLinks` against detected locales. Links missing locale prefixes will break in the migrated site.
 
-### 2.5 Install Additional shadcn Components
-
-Based on `ir_capture` `uiPatterns` data, install any remaining shadcn components. Use the **shadcn MCP** to browse and install:
-
-```
-"Install the dialog, table, and tabs components from shadcn"
-```
-
-Or via CLI:
-```bash
-bunx shadcn@latest add dialog table tabs accordion -y
-```
-
-Also search for **blocks** that match legacy page patterns (e.g., login forms, dashboards, pricing pages). Blocks provide pre-built layouts that accelerate migration.
-
-**VERIFY**: All components listed in `uiPatterns.shadcnComponentsNeeded` are installed.
-
-### 2.6 Install Conditional Dependencies
+### 2.5 Install Conditional Dependencies
 
 Based on discovery results:
 
@@ -316,42 +269,49 @@ bun add framer-motion
 
 ## PHASE 3: MIGRATE (PER ROUTE)
 
-For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4.
+For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4. Start with `/` to build the shared shell first.
 
 ### CRITICAL RULES — VIOLATIONS ARE FAILURES
 
 **FORBIDDEN:**
 - `dangerouslySetInnerHTML` — NEVER use to copy legacy HTML
 - `onclick="..."` or any inline event handlers
-- Legacy CSS class names (must convert to Tailwind)
 - jQuery or any jQuery patterns
 - `<script>` tags with inline JavaScript
 - `class=` instead of `className=`
-- Raw `<button>`, `<input>`, `<textarea>`, `<select>`, `<table>`, `<dialog>` outside `components/ui/` — use shadcn
-- `@font-face` in CSS — use `next/font` (see Appendix C)
 
 **REQUIRED:**
 - Proper JSX with `className`
 - React event handlers (`onClick={handler}`)
-- Tailwind CSS utilities (convert from captured styles — see Appendix A)
-- shadcn/ui components for all form elements, dialogs, tables (see Appendix D)
+- Match computed styles visually (Tailwind utilities, CSS modules, or global CSS — see Appendix A)
 - `next/image` for images
-- `next/font` for fonts
 - Server Components by default
 - `'use client'` only when needed
 
+**RECOMMENDED** (enforce in Phase 5):
+- `next/font` for fonts (see Appendix C)
+- shadcn/ui components for form elements, dialogs, tables (see Appendix D)
+- Tailwind utilities over CSS modules/global CSS
+
 ### 3.1 Build Page
+
+**For `/` (first route):** also build the shared shell:
+1. Create `src/app/layout.tsx` (RootLayout) with HTML structure, metadata
+2. Extract shared components: Header, Footer, Nav → `src/components/`
+3. Register components in `migration.json` under `components`
+
+**For all routes (including `/`):**
 
 Read captured IR from `migration.json` for this route.
 
-Use `ir_inspect(selector: "...", site: "legacy")` to inspect specific elements.
+Use `ir_inspect(selector: "...", site: "legacy")` to get full computed styles for specific elements.
 
 Based on captured IR:
-1. Create `app/<route>/page.tsx`
+1. Create `src/app/<route>/page.tsx`
 2. Convert layout structure to JSX
 3. Convert captured computed styles to Tailwind (see Appendix A)
 4. Convert event handlers to React patterns
-5. Create components for reusable parts (header, footer)
+5. Import shared components from `src/components/` — do NOT recreate them
 6. Recreate animations using captured animation data (see Appendix B)
 
 ### 3.2 Code Quality Gate
@@ -364,35 +324,17 @@ grep -r "dangerouslySetInnerHTML" <next-project>/src/
 grep -r 'onclick="' <next-project>/src/
 grep -r 'class="' <next-project>/src/ --include="*.tsx" --include="*.jsx"
 grep -r 'style={{' <next-project>/src/ --include="*.tsx" --include="*.jsx"
-grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
 grep -r "from ['\"]jquery['\"]" <next-project>/src/
-
-# Font enforcement — must use next/font, not raw @font-face
-grep -r "@font-face" <next-project>/src/
-
-# shadcn enforcement — raw HTML elements FORBIDDEN outside components/ui/
-grep -rn '<button' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
-grep -rn '<input' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
-grep -rn '<textarea' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
-grep -rn '<select' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
-grep -rn '<table' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
-grep -rn '<dialog' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
 ```
 
-**ALL MUST RETURN**: No results. Use shadcn components (`<Button>`, `<Input>`, `<Table>`, etc.) instead of raw HTML — see Appendix D.
-
-```bash
-# Verify shadcn IS being used (SHOULD return matches)
-grep -rn "from ['\"]@/components/ui/" <next-project>/src/ --include="*.tsx"
-```
-
-Fix any violations before proceeding.
+**ALL MUST RETURN**: No results. Fix any violations before proceeding.
 
 ### 3.3 Visual Validation Loop
 
 Start watch mode:
 ```
 ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
+→ { status: "watching", match: {...}, totalIssues: N, firstIssue: {...} }
 ```
 
 Loop until match >= 95%:
@@ -416,7 +358,7 @@ IF result.regressionBlocked:
 
 IF result.issue exists:
   - Read issue details (selector, styles, position)
-  - Fix the specific issue using Tailwind
+  - Fix the specific issue
   - Save file → wait for rebuild → call ir_next again
   - After 3 failed attempts on the same issue: ir_next(skip: true)
   - Document skipped issue in migration.json under skippedIssues
@@ -427,20 +369,15 @@ IF result.complete or match >= 95%:
 
 **CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
 
-### 3.4 Verify and Mark Complete
+### 3.4 Mark Route Complete
 
 ```
-ir_status()
+ir_stop()
 ```
 
-Confirm:
-- `match >= 95%`
-- `clsBlocked: false`
-- `clsRating: "good"`
+Update `routeStatus` to `"validated"` in `migration.json`. Move to next route.
 
-Mark route complete in `migration.json`. Move to next route.
-
-If only skipped issues remain and match is below 95%: mark route for human review and continue.
+If only skipped issues remain and match is below 95%: update `routeStatus` to `"failed"`, mark route for human review, and continue.
 
 ---
 
@@ -463,6 +400,94 @@ ir_stop()
 
 ---
 
+## PHASE 5: MODERNIZE (OPTIONAL)
+
+Post-migration pass to adopt modern component patterns and tooling. Run this **after all routes pass visual parity** in Phase 4. Each step is independent — skip any that don't apply.
+
+### 5.1 Install shadcn/ui
+
+```bash
+cd <next-project>
+bunx shadcn@latest init -y
+```
+
+### 5.2 Configure shadcn MCP
+
+Add to `.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "migent": {
+      "command": "npx",
+      "args": ["-y", "migent", "mcp"]
+    },
+    "shadcn": {
+      "command": "npx",
+      "args": ["shadcn@latest", "mcp"]
+    }
+  }
+}
+```
+
+### 5.3 Install Components
+
+Use `ir_capture` `uiPatterns.shadcnComponentsNeeded` data to install the right components:
+
+```bash
+# Example: if uiPatterns shows Button, Dialog, Table, NavigationMenu
+bunx shadcn@latest add button dialog table navigation-menu -y
+```
+
+Also search for **blocks** that match legacy page patterns (e.g., login forms, dashboards, pricing pages).
+
+### 5.4 Convert to shadcn Components
+
+Replace raw HTML elements with shadcn equivalents (see Appendix D):
+- `<button>` → `<Button>`
+- `<input>` → `<Input>`
+- `<table>` → `<Table>`
+- `<dialog>` / `.modal` → `<Dialog>`
+
+### 5.5 Convert to Tailwind Utilities
+
+Replace CSS modules and global CSS with Tailwind utilities where possible. Use Appendix A as a mapping reference.
+
+### 5.6 Convert to next/font
+
+Replace `@font-face` declarations with `next/font` (see Appendix C).
+
+### 5.7 Verify No Visual Regressions
+
+Run `ir_start` again after modernization to confirm no regressions:
+```
+ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
+```
+
+Check that match percentages are unchanged or improved.
+
+### 5.8 Code Quality Checks
+
+```bash
+# shadcn enforcement — raw HTML elements should be replaced
+grep -rn '<button' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<input' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<textarea' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<select' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<table' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+grep -rn '<dialog' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep -v 'components/ui/'
+
+# Font enforcement — no raw @font-face
+grep -r "@font-face" <next-project>/src/
+
+# Verify shadcn IS being used
+grep -rn "from ['\"]@/components/ui/" <next-project>/src/ --include="*.tsx"
+
+# Legacy CSS class names should be converted to Tailwind
+grep -rE 'className="[^"]*[a-z]+_[a-z]+' <next-project>/src/ --include="*.tsx"
+```
+
+---
+
 ## ERROR HANDLING
 
 ### MCP tool fails
@@ -475,10 +500,19 @@ Stop and ask user to restart the server.
 
 ## RESUMABILITY
 
+`migration.json` tracks per-route status in `routeStatus`:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Not yet migrated |
+| `validated` | Passed visual validation (match >= 95%) |
+| `failed` | Below 95% after exhausting fixes, needs human review |
+
 If `migration.json` exists when `/migration` is invoked:
 1. Read existing state
-2. Skip completed routes
-3. Resume from last in-progress route
+2. Skip `validated` routes entirely
+3. Resume from first `pending` route
+4. Retry `failed` routes if user requests it
 
 ---
 
@@ -719,9 +753,9 @@ fontFamily: {
 
 ---
 
-## APPENDIX D: shadcn Component Mapping
+## APPENDIX D: shadcn Component Mapping (Phase 5)
 
-**MANDATORY**: Use shadcn components instead of raw HTML. Map legacy elements:
+Use shadcn components instead of raw HTML. Reference this during Phase 5 (Modernize). Map legacy elements:
 
 | Legacy HTML | shadcn Component | Import |
 |---|---|---|
@@ -765,9 +799,9 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 </Table>
 ```
 
-**Raw HTML elements (`<button>`, `<input>`, `<table>`, `<dialog>`) are FORBIDDEN outside `src/components/ui/`.**
+**Raw HTML elements (`<button>`, `<input>`, `<table>`, `<dialog>`) should be replaced in Phase 5.**
 
-**Additional code quality checks for shadcn/fonts:**
+**Code quality checks (run during Phase 5):**
 ```bash
 # No raw @font-face in CSS (must use next/font)
 grep -r "@font-face" <next-project>/src/
@@ -784,7 +818,7 @@ grep -rn '<table' <next-project>/src/ --include="*.tsx" --include="*.jsx" | grep
 # Verify shadcn components ARE being used
 grep -rn "from ['\"]@/components/ui/" <next-project>/src/ --include="*.tsx"
 ```
-**ALL MUST RETURN**: No results (except shadcn verification which SHOULD return matches).
+**ALL MUST RETURN**: No results (except shadcn verification which SHOULD return matches). These checks are enforced in Phase 5, not during Phase 3 migration.
 
 ---
 
@@ -817,11 +851,11 @@ Deterministic capture sequence:
 - **Internal links** (`internalLinks`): { total, links[] } — for route validation
 
 ### ir_start
-Start migration watch mode. Captures both sites, diffs, watches for file changes.
+Start migration watch mode. Captures both sites, diffs, starts file watcher, returns first issue.
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
-Returns: Initial diff, first issue, and `localeConfig` (if locales detected in routes).
+Returns: `{ status: "watching", match: {...}, totalIssues: N, firstIssue: {...} }`.
 
 ### ir_next
 Get next issue to fix. Blocks on CLS gate and regressions.
@@ -832,7 +866,7 @@ ir_next(skip?: boolean)
 - Returns: Issue with selector, position, styles, and fix suggestion.
 
 ### ir_status
-Get migration progress: match percentages, issue counts by severity, CLS score, regression state.
+Migration progress: match percentages, issue counts by severity, CLS score, regression state.
 
 ### ir_inspect
 Inspect element by selector or text.
