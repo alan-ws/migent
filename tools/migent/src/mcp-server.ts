@@ -669,6 +669,10 @@ function createServer(): Server {
  * Start the MCP server
  */
 async function main() {
+  // MCP uses stdout for JSON-RPC — redirect console.log to stderr
+  // so watch.ts/capture.ts debug output doesn't corrupt the protocol
+  console.log = console.error;
+
   const server = createServer();
   const transport = new StdioServerTransport();
 
