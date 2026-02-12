@@ -20,6 +20,7 @@ npm-debug.log*
 *.tsbuildinfo
 
 # IDE
+.claude/
 .idea/
 .vscode/
 *.swp
