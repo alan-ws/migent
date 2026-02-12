@@ -122,10 +122,10 @@ Configure MCP servers in the **workspace root** (NOT inside the Next.js project)
 workspace/              ← config goes HERE
 ├── legacy-site/
 ├── my-next-app/
-└── .mcp.json / .codex/config.toml
+└── .mcp.json
 ```
 
-**Claude Code** — create `.mcp.json`:
+Create `.mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -135,11 +135,6 @@ workspace/              ← config goes HERE
     }
   }
 }
-```
-
-**Codex CLI** — run:
-```bash
-codex mcp add migent -- npx -y migent mcp
 ```
 
 ### 1.9 Verify MCP
@@ -189,14 +184,19 @@ Analyze legacy codebase to find all routes:
 - Check router files (Express routes, Next.js pages, PHP files)
 - Check navigation links in captured IR
 
-### 2.2 Capture All Routes
+### 2.2 Capture All Routes (Parallel)
 
-For EACH discovered route:
+Call `ir_capture` for all discovered routes **in parallel** (batch all calls in a single message). Each `ir_capture` creates a fresh Playwright page — no shared state conflicts.
+
 ```
-ir_capture(port: <legacy-port>, route: "<route>")
+# Call all in one message — they run concurrently:
+ir_capture(port: <legacy-port>, route: "/")
+ir_capture(port: <legacy-port>, route: "/about")
+ir_capture(port: <legacy-port>, route: "/contact")
+# ... all discovered routes
 ```
 
-Save results to `migration.json`:
+Collect all results. Write captures to `migration.json`:
 ```json
 {
   "legacy": {
@@ -212,6 +212,11 @@ Save results to `migration.json`:
   "next": {
     "directory": "./my-next-app",
     "port": 3000
+  },
+  "routeStatus": {
+    "/": "pending",
+    "/about": "pending",
+    "/contact": "pending"
   },
   "progress": {},
   "skippedIssues": []
@@ -239,7 +244,7 @@ Document findings in `migration.json` under `legacy.javascript`.
 Check `ir_capture` results for locale patterns:
 
 1. **Redirect-based detection**: If `ir_capture` returns `redirects` (e.g., `/` → `/en/`), the site uses locale prefixes.
-2. **Route-based detection**: If discovered routes have locale prefixes (e.g., `/en/about`, `/fr/about`), locales are in use. `ir_start` will confirm via `localeConfig` in Phase 3.
+2. **Route-based detection**: If discovered routes have locale prefixes (e.g., `/en/about`, `/fr/about`), locales are in use.
 
 **If locales are detected:**
 - Set up Next.js i18n middleware for locale routing
@@ -264,7 +269,7 @@ bun add framer-motion
 
 ## PHASE 3: MIGRATE (PER ROUTE)
 
-For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4.
+For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4. Start with `/` to build the shared shell first.
 
 ### CRITICAL RULES — VIOLATIONS ARE FAILURES
 
@@ -290,16 +295,23 @@ For EACH route discovered in Phase 2, repeat steps 3.1 through 3.4.
 
 ### 3.1 Build Page
 
+**For `/` (first route):** also build the shared shell:
+1. Create `src/app/layout.tsx` (RootLayout) with HTML structure, metadata
+2. Extract shared components: Header, Footer, Nav → `src/components/`
+3. Register components in `migration.json` under `components`
+
+**For all routes (including `/`):**
+
 Read captured IR from `migration.json` for this route.
 
-Use `ir_inspect(selector: "...", site: "legacy")` to inspect specific elements.
+Use `ir_inspect(selector: "...", site: "legacy")` to get full computed styles for specific elements.
 
 Based on captured IR:
-1. Create `app/<route>/page.tsx`
+1. Create `src/app/<route>/page.tsx`
 2. Convert layout structure to JSX
 3. Convert captured computed styles to Tailwind (see Appendix A)
 4. Convert event handlers to React patterns
-5. Create components for reusable parts (header, footer)
+5. Import shared components from `src/components/` — do NOT recreate them
 6. Recreate animations using captured animation data (see Appendix B)
 
 ### 3.2 Code Quality Gate
@@ -319,17 +331,10 @@ grep -r "from ['\"]jquery['\"]" <next-project>/src/
 
 ### 3.3 Visual Validation Loop
 
-Start watch mode (returns immediately — captures run in background):
+Start watch mode:
 ```
 ir_start(legacyPort: <legacy-port>, nextPort: 3000, legacyRoute: "<route>", nextRoute: "<route>")
-→ { status: "initializing" }
-```
-
-Poll until ready:
-```
-ir_status()
-→ While initializing: { status: "initializing" }
-→ When ready: { status: "watching", match: {...}, firstIssue: {...}, routes: [...] }
+→ { status: "watching", match: {...}, totalIssues: N, firstIssue: {...} }
 ```
 
 Loop until match >= 95%:
@@ -364,20 +369,15 @@ IF result.complete or match >= 95%:
 
 **CLS is a hard gate.** `ir_next` will not serve style/content/missing issues until CLS score is "good" (<= 0.1). This is enforced by the tool, not by convention. You cannot skip it.
 
-### 3.4 Verify and Mark Complete
+### 3.4 Mark Route Complete
 
 ```
-ir_status()
+ir_stop()
 ```
 
-Confirm:
-- `match >= 95%`
-- `clsBlocked: false`
-- `clsRating: "good"`
+Update `routeStatus` to `"validated"` in `migration.json`. Move to next route.
 
-Mark route complete in `migration.json`. Move to next route.
-
-If only skipped issues remain and match is below 95%: mark route for human review and continue.
+If only skipped issues remain and match is below 95%: update `routeStatus` to `"failed"`, mark route for human review, and continue.
 
 ---
 
@@ -427,11 +427,6 @@ Add to `.mcp.json`:
     }
   }
 }
-```
-
-Or for Codex CLI:
-```bash
-codex mcp add shadcn -- npx shadcn@latest mcp
 ```
 
 ### 5.3 Install Components
@@ -505,10 +500,19 @@ Stop and ask user to restart the server.
 
 ## RESUMABILITY
 
+`migration.json` tracks per-route status in `routeStatus`:
+
+| Status | Meaning |
+|---|---|
+| `pending` | Not yet migrated |
+| `validated` | Passed visual validation (match >= 95%) |
+| `failed` | Below 95% after exhausting fixes, needs human review |
+
 If `migration.json` exists when `/migration` is invoked:
 1. Read existing state
-2. Skip completed routes
-3. Resume from last in-progress route
+2. Skip `validated` routes entirely
+3. Resume from first `pending` route
+4. Retry `failed` routes if user requests it
 
 ---
 
@@ -847,11 +851,11 @@ Deterministic capture sequence:
 - **Internal links** (`internalLinks`): { total, links[] } — for route validation
 
 ### ir_start
-Start migration watch mode (**non-blocking** — returns immediately).
+Start migration watch mode. Captures both sites, diffs, starts file watcher, returns first issue.
 ```
 ir_start(legacyPort, nextPort, legacyRoute?, nextRoute?, watchPaths?)
 ```
-Returns: `{ status: "initializing" }`. Captures both sites, diffs, and starts file watcher in the background. Poll `ir_status` until status changes to `"watching"`.
+Returns: `{ status: "watching", match: {...}, totalIssues: N, firstIssue: {...} }`.
 
 ### ir_next
 Get next issue to fix. Blocks on CLS gate and regressions.
@@ -862,7 +866,7 @@ ir_next(skip?: boolean)
 - Returns: Issue with selector, position, styles, and fix suggestion.
 
 ### ir_status
-Migration progress. During init: `{ status: "initializing" }`. After ready: match percentages, issue counts by severity, CLS score, regression state, discovered routes, viewports, localeConfig, firstIssue.
+Migration progress: match percentages, issue counts by severity, CLS score, regression state.
 
 ### ir_inspect
 Inspect element by selector or text.

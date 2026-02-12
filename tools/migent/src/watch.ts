@@ -70,8 +70,8 @@ async function runDiff(config: WatchConfig, viewport?: number): Promise<DiffResu
     : { width: 1280, height: 800 };
 
   const [legacy, next] = await Promise.all([
-    capturePage(config.legacyPort, config.legacyRoute, vp),
-    capturePage(config.nextPort, config.nextRoute, vp),
+    capturePage(config.legacyPort, config.legacyRoute, vp, { lite: true }),
+    capturePage(config.nextPort, config.nextRoute, vp, { lite: true }),
   ]);
 
   setStatus('diffing');

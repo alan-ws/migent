@@ -192,8 +192,10 @@ export interface AnimationData {
 export async function capturePage(
   port: number,
   route: string,
-  viewport: { width: number; height: number } = { width: 1280, height: 800 }
+  viewport: { width: number; height: number } = { width: 1280, height: 800 },
+  options?: { lite?: boolean }
 ): Promise<PageIR> {
+  const lite = options?.lite ?? false;
   const browser = await getBrowser();
   const context = await browser.newContext({
     viewport,
@@ -255,49 +257,29 @@ export async function capturePage(
       observer.observe({ type: 'layout-shift', buffered: true });
     });
 
-    // Track redirects
+    // Track redirects (discovery only — skipped in lite mode)
     const redirects: RedirectEntry[] = [];
-    page.on('response', (response) => {
-      const status = response.status();
-      if (status >= 300 && status < 400) {
-        const location = response.headers()['location'];
-        if (location) {
-          redirects.push({
-            from: response.url(),
-            to: location,
-            statusCode: status,
-          });
+    if (!lite) {
+      page.on('response', (response) => {
+        const status = response.status();
+        if (status >= 300 && status < 400) {
+          const location = response.headers()['location'];
+          if (location) {
+            redirects.push({
+              from: response.url(),
+              to: location,
+              statusCode: status,
+            });
+          }
         }
-      }
+      });
+    }
+
+    // 1. Navigate and wait for network idle
+    await page.goto(url, {
+      waitUntil: 'networkidle',
+      timeout: 30000,
     });
-
-    // 1. Navigate and wait for network idle (fall back to load if site has persistent connections)
-    let navResponse;
-    try {
-      navResponse = await page.goto(url, {
-        waitUntil: 'networkidle',
-        timeout: 15000,
-      });
-    } catch {
-      // networkidle timed out — site has polling/websockets/analytics; fall back to load
-      navResponse = await page.goto(url, {
-        waitUntil: 'load',
-        timeout: 15000,
-      });
-    }
-
-    // Detect JS-based redirects (final URL differs from requested)
-    const finalUrl = page.url();
-    if (finalUrl !== url && navResponse) {
-      const alreadyTracked = redirects.some((r) => r.to === finalUrl || r.from === url);
-      if (!alreadyTracked) {
-        redirects.push({
-          from: url,
-          to: finalUrl,
-          statusCode: 302,
-        });
-      }
-    }
 
     // 2. Force all lazy images to load
     await page.evaluate(() => {
@@ -337,52 +319,54 @@ export async function capturePage(
     // 4. Wait for fonts to load
     await page.evaluate(() => document.fonts.ready);
 
-    // 4b. Extract @font-face declarations
-    const fontDeclarations = await page.evaluate((): FontFaceDeclaration[] => {
-      const fonts: FontFaceDeclaration[] = [];
-      for (const sheet of document.styleSheets) {
-        try {
-          for (const rule of sheet.cssRules) {
-            if (rule instanceof CSSFontFaceRule) {
-              const style = rule.style;
-              const family = (style.getPropertyValue('font-family') || '').replace(/['"]/g, '').trim();
-              if (!family) continue;
+    // 4b. Extract @font-face declarations (discovery only — skipped in lite mode)
+    const fontDeclarations: FontFaceDeclaration[] = [];
+    if (!lite) {
+      const fonts = await page.evaluate((): FontFaceDeclaration[] => {
+        const fonts: FontFaceDeclaration[] = [];
+        for (const sheet of document.styleSheets) {
+          try {
+            for (const rule of sheet.cssRules) {
+              if (rule instanceof CSSFontFaceRule) {
+                const style = rule.style;
+                const family = (style.getPropertyValue('font-family') || '').replace(/['"]/g, '').trim();
+                if (!family) continue;
 
-              const srcValue = style.getPropertyValue('src') || '';
-              const srcUrls: string[] = [];
-              const formats: string[] = [];
+                const srcValue = style.getPropertyValue('src') || '';
+                const srcUrls: string[] = [];
+                const formats: string[] = [];
 
-              const urlMatches = srcValue.matchAll(/url\(['"]?([^'")\s]+)['"]?\)/g);
-              for (const m of urlMatches) {
-                srcUrls.push(m[1]);
+                const urlMatches = srcValue.matchAll(/url\(['"]?([^'")\s]+)['"]?\)/g);
+                for (const m of urlMatches) {
+                  srcUrls.push(m[1]);
+                }
+
+                const formatMatches = srcValue.matchAll(/format\(['"]?([^'")\s]+)['"]?\)/g);
+                for (const m of formatMatches) {
+                  formats.push(m[1]);
+                }
+
+                fonts.push({
+                  family,
+                  src: srcUrls,
+                  weight: style.getPropertyValue('font-weight') || undefined,
+                  style: style.getPropertyValue('font-style') || undefined,
+                  display: style.getPropertyValue('font-display') || undefined,
+                  formats,
+                });
               }
-
-              const formatMatches = srcValue.matchAll(/format\(['"]?([^'")\s]+)['"]?\)/g);
-              for (const m of formatMatches) {
-                formats.push(m[1]);
-              }
-
-              fonts.push({
-                family,
-                src: srcUrls,
-                weight: style.getPropertyValue('font-weight') || undefined,
-                style: style.getPropertyValue('font-style') || undefined,
-                display: style.getPropertyValue('font-display') || undefined,
-                formats,
-              });
             }
+          } catch {
+            // Cross-origin stylesheet, skip
           }
-        } catch {
-          // Cross-origin stylesheet, skip
         }
-      }
-      return fonts;
-    });
+        return fonts;
+      });
+      fontDeclarations.push(...fonts);
+    }
 
-    // Wait for network to settle again after lazy loading (bounded)
-    await page.waitForLoadState('networkidle').catch(() => {
-      // networkidle timed out after lazy load — proceed anyway
-    });
+    // Wait for network to settle again after lazy loading
+    await page.waitForLoadState('networkidle');
 
     // 5. Extract animation metadata BEFORE we finish animations
     const animationData = await page.evaluate((): AnimationData => {
@@ -697,8 +681,10 @@ export async function capturePage(
 
     const root = processElement(result.rootData);
 
-    // Detect UI patterns for shadcn component mapping
-    const uiPatterns = await page.evaluate((): DetectedUIPattern[] => {
+    // Detect UI patterns for shadcn component mapping (discovery only — skipped in lite mode)
+    let uiPatterns: DetectedUIPattern[] = [];
+    if (!lite) {
+      uiPatterns = await page.evaluate((): DetectedUIPattern[] => {
       const patterns: Array<{
         type: string;
         selectors: string[];
@@ -750,9 +736,12 @@ export async function capturePage(
 
       return results;
     });
+    }
 
-    // Extract internal links
-    const internalLinks = await page.evaluate((pageUrl: string): string[] => {
+    // Extract internal links (discovery only — skipped in lite mode)
+    let internalLinks: string[] = [];
+    if (!lite) {
+      internalLinks = await page.evaluate((pageUrl: string): string[] => {
       const links = new Set<string>();
       const baseHost = new URL(pageUrl).host;
 
@@ -780,6 +769,7 @@ export async function capturePage(
 
       return Array.from(links);
     }, url);
+    }
 
     return {
       url,

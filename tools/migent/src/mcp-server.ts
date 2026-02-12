@@ -19,8 +19,6 @@ import {
 
 import { capturePage, closeBrowser } from './capture.js';
 import { diffPages } from './diff.js';
-// Route discovery + breakpoint detection are Phase 2 concerns (ir_capture).
-// ir_start uses the route the agent provides — no crawling needed.
 import {
   startWatch,
   stopWatch,
@@ -29,26 +27,20 @@ import {
   getNextIssue,
   advanceIssue,
   getRemainingIssueCount,
-  formatDiffForMCP,
 } from './watch.js';
 import { findElementByPosition, findElementByText } from './matcher.js';
-import type { PageIR, DiffResult, ElementIR, LocaleConfig } from './types.js';
+import type { PageIR, DiffResult, ElementIR } from './types.js';
 
 // In-memory stores
 let legacyPageIR: PageIR | null = null;
 let nextPageIR: PageIR | null = null;
 let lastDiff: DiffResult | null = null;
-let discoveredRoutes: string[] = [];
-let detectedViewports: number[] = [];
-let localeConfig: LocaleConfig | null = null;
-let initStatus: 'idle' | 'initializing' | 'ready' | 'error' = 'idle';
-let initError: string | null = null;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function reply(data: object) {
   return {
-    content: [{ type: 'text' as const, text: JSON.stringify(data, null, 2) }],
+    content: [{ type: 'text' as const, text: JSON.stringify(data) }],
   };
 }
 
@@ -142,7 +134,7 @@ function createServer(): Server {
         {
           name: 'ir_start',
           description:
-            'Start migration watch mode (non-blocking). Returns immediately while capturing both sites in the background. Poll ir_status until status is "watching".',
+            'Start migration watch mode. Captures both sites, diffs, starts file watcher, returns first issue.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -177,7 +169,7 @@ function createServer(): Server {
         {
           name: 'ir_status',
           description:
-            'Migration progress. During init: reports "initializing" until ready. After: match percentages, issue counts, CLS score, regression state, routes, viewports.',
+            'Migration progress: match percentages, issue counts by severity, CLS score, regression state.',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -257,10 +249,10 @@ function createServer(): Server {
           // Store for later inspect
           legacyPageIR = pageIR;
 
-          // Top-level elements (cap at 20)
+          // Top-level elements for understanding page structure
           const topLevelElements = pageIR.elements
             .filter((el) => !el.selector.includes(' > ') || el.selector.split(' > ').length <= 2)
-            .slice(0, 20)
+            .slice(0, 30)
             .map((el) => ({
               tag: el.tag,
               selector: el.selector,
@@ -273,20 +265,20 @@ function createServer(): Server {
               },
             }));
 
-          // Animations — show counts + capped sample; diff loop catches the rest
+          // Animation data for recreating in Next.js
           const animations = pageIR.animations
             ? {
                 keyframeCount: pageIR.animations.keyframes.length,
                 keyframes: pageIR.animations.keyframes.slice(0, 10),
                 animatedElementCount: pageIR.animations.animatedElements.length,
-                animatedElements: pageIR.animations.animatedElements.slice(0, 10),
+                animatedElements: pageIR.animations.animatedElements.slice(0, 20),
                 transitionElementCount: pageIR.animations.transitionElements.length,
-                transitionElements: pageIR.animations.transitionElements.slice(0, 10),
+                transitionElements: pageIR.animations.transitionElements.slice(0, 20),
                 jQueryAnimations: pageIR.animations.jQueryAnimations,
               }
             : null;
 
-          // CLS (top 3 shifters)
+          // CLS (top 5 shifters)
           const cls = pageIR.cls
             ? {
                 score: pageIR.cls.score,
@@ -294,7 +286,7 @@ function createServer(): Server {
                 shiftCount: pageIR.cls.shifts.length,
                 topShifters: pageIR.cls.shifts
                   .sort((a, b) => b.value - a.value)
-                  .slice(0, 3)
+                  .slice(0, 5)
                   .map((s) => ({
                     value: s.value,
                     elements: s.sources.map((src) => ({
@@ -348,6 +340,7 @@ function createServer(): Server {
             uiPatterns,
             redirects: pageIR.redirects || null,
             internalLinks,
+            message: 'Use ir_inspect(selector, site: "legacy") for full element styles. Animation data includes @keyframes, durations, easing for recreation.',
           });
         }
 
@@ -360,18 +353,12 @@ function createServer(): Server {
           const nextRoute = typeof a.nextRoute === 'string' ? a.nextRoute : '/';
           const watchPaths = Array.isArray(a.watchPaths) ? (a.watchPaths as string[]) : undefined;
 
-          if (isWatching() || initStatus === 'initializing') {
+          if (isWatching()) {
             return reply({
-              status: initStatus === 'initializing' ? 'initializing' : 'watching',
-              message: initStatus === 'initializing'
-                ? 'Already initializing. Poll ir_status to check when ready.'
-                : 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
+              status: 'watching',
+              message: 'Watch mode already running. Use ir_status to check progress or ir_stop to stop.',
             });
           }
-
-          // Return immediately, do heavy work in background
-          initStatus = 'initializing';
-          initError = null;
 
           const defaultWatchPaths = watchPaths || [
             process.cwd() + '/components',
@@ -379,78 +366,43 @@ function createServer(): Server {
             process.cwd() + '/src',
           ];
 
-          // Background: discover, capture, diff, start watch
-          (async () => {
-            try {
-              const t0 = Date.now();
-              const log = (msg: string) => console.error(`[migent:init] ${msg} (${Date.now() - t0}ms)`);
+          // Capture both sites in parallel (lite — no fonts/UI patterns/links)
+          const viewport = { width: 1280, height: 800 };
+          [legacyPageIR, nextPageIR] = await Promise.all([
+            capturePage(legacyPort, legacyRoute, viewport, { lite: true }),
+            capturePage(nextPort, nextRoute, viewport, { lite: true }),
+          ]);
 
-              // Skip heavy route discovery — agent provides the route explicitly.
-              // Discovery belongs in Phase 2 (ir_capture), not in the watch loop.
-              discoveredRoutes = [legacyRoute];
-              detectedViewports = [1280];
-              localeConfig = null;
-              log('Using provided route, skipping discovery');
+          // Run initial diff
+          lastDiff = diffPages(legacyPageIR, nextPageIR);
 
-              // Capture both sites in parallel
-              log('Capturing both sites...');
-              const viewport = { width: detectedViewports[0] || 1280, height: 800 };
-              [legacyPageIR, nextPageIR] = await Promise.all([
-                capturePage(legacyPort, legacyRoute, viewport),
-                capturePage(nextPort, nextRoute, viewport),
-              ]);
-              log(`Captures done: legacy=${legacyPageIR.elements.length} next=${nextPageIR.elements.length} elements`);
+          // Start watch mode (pass initialDiff to avoid double capture)
+          startWatch({
+            legacyPort,
+            nextPort,
+            legacyRoute,
+            nextRoute,
+            watchPaths: defaultWatchPaths,
+            initialDiff: lastDiff,
+            onDiff: (diff) => {
+              lastDiff = diff;
+            },
+          }).catch(console.error);
 
-              // Run initial diff
-              lastDiff = diffPages(legacyPageIR, nextPageIR);
-              log(`Diff done: ${lastDiff.issues.length} issues, ${lastDiff.match.overall}% match`);
-
-              // Mark ready BEFORE starting watch (startWatch runs indefinitely)
-              initStatus = 'ready';
-
-              // Start watch mode — fire and forget (pass initialDiff to avoid double capture)
-              startWatch({
-                legacyPort,
-                nextPort,
-                legacyRoute,
-                nextRoute,
-                watchPaths: defaultWatchPaths,
-                initialDiff: lastDiff,
-                onDiff: (diff) => {
-                  lastDiff = diff;
-                },
-                onError: (err) => {
-                  console.error('Watch error:', err.message);
-                },
-              }).catch((err) => console.error('Watch startup failed:', err));
-
-              log('Watch mode started');
-            } catch (err) {
-              initStatus = 'error';
-              initError = err instanceof Error ? err.message : String(err);
-              console.error(`[migent:init] FAILED: ${initError}`);
-            }
-          })();
+          // Return first issue immediately
+          const firstIssue = lastDiff.issues[0] || null;
 
           return reply({
-            status: 'initializing',
-            message: 'Capturing sites and running initial diff. Poll ir_status to check when ready.',
+            status: 'watching',
+            message: `Watch mode started. ${lastDiff.issues.length} issues found.`,
+            match: lastDiff.match,
+            totalIssues: lastDiff.issues.length,
+            firstIssue: firstIssue ? formatIssue(firstIssue) : null,
           });
         }
 
         // ── ir_next ───────────────────────────────────────────────────
         case 'ir_next': {
-          // Still initializing — tell agent to wait
-          if (initStatus === 'initializing') {
-            return reply({
-              status: 'initializing',
-              message: 'Still capturing sites. Poll ir_status to check when ready.',
-            });
-          }
-          if (initStatus === 'error') {
-            return errorReply(`Initialization failed: ${initError}`);
-          }
-
           const a = args as Record<string, unknown>;
           const skip = a.skip === true;
 
@@ -530,14 +482,6 @@ function createServer(): Server {
 
         // ── ir_status ─────────────────────────────────────────────────
         case 'ir_status': {
-          // Handle initializing state
-          if (initStatus === 'initializing') {
-            return reply({ status: 'initializing', message: 'Capturing sites and running initial diff...' });
-          }
-          if (initStatus === 'error') {
-            return reply({ status: 'error', message: `Initialization failed: ${initError}` });
-          }
-
           const state = getWatchState();
 
           if (!state.lastDiff) {
@@ -560,17 +504,6 @@ function createServer(): Server {
             clsRating: state.lastDiff.cls?.next?.rating ?? null,
             stats: state.lastDiff.stats,
           };
-
-          // On first ready report, include discovery data the agent needs
-          if (initStatus === 'ready') {
-            statusReply.routes = discoveredRoutes.slice(0, 10);
-            statusReply.viewports = detectedViewports;
-            if (localeConfig && localeConfig.detected) {
-              statusReply.localeConfig = localeConfig;
-            }
-            const firstIssue = state.lastDiff.issues[0] || null;
-            statusReply.firstIssue = firstIssue ? formatIssue(firstIssue) : null;
-          }
 
           return reply(statusReply);
         }
@@ -649,8 +582,6 @@ function createServer(): Server {
         case 'ir_stop': {
           stopWatch();
           await closeBrowser();
-          initStatus = 'idle';
-          initError = null;
           return reply({ success: true, message: 'Watch mode stopped.' });
         }
 
