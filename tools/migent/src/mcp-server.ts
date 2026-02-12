@@ -108,7 +108,7 @@ function findElement(pageIR: PageIR, selector: string): ElementIR | undefined {
 
 function createServer(): Server {
   const server = new Server(
-    { name: 'migent', version: '2.1.0' },
+    { name: 'migent', version: '3.2.0' },
     { capabilities: { tools: {} } }
   );
 
